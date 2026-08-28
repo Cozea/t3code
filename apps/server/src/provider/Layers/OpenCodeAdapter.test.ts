@@ -2888,6 +2888,75 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
+  it.effect("caps terminal ancestry retries after a request finishes", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-terminal-ancestry-retry-cap");
+      const childId = "ses_terminal_retry_cap_child";
+      const request = permissionRequest("per_terminal_retry_cap", childId);
+      const terminalEvent = promiseWithResolvers<unknown>();
+      const askedAttempted = promiseWithResolvers<void>();
+      const terminalAttempted = promiseWithResolvers<void>();
+      let terminalReleased = false;
+      runtimeMock.state.transientErrorSessionIds.add(childId);
+      runtimeMock.state.sessionGetObserved = (sessionID) => {
+        if (sessionID !== childId) {
+          return;
+        }
+        if (terminalReleased) {
+          terminalAttempted.resolve(undefined);
+        } else {
+          askedAttempted.resolve(undefined);
+        }
+      };
+      runtimeMock.state.subscribedEvents = [
+        { id: "evt-terminal-cap-ask", type: "permission.asked", properties: request },
+        terminalEvent.promise,
+      ];
+
+      const unexpectedRequestFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.threadId === threadId &&
+            (event.type === "request.opened" || event.type === "request.resolved"),
+        ),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "approval-required",
+      });
+      yield* Effect.promise(() => askedAttempted.promise);
+      const askedAttempts = runtimeMock.state.sessionGetIds.filter(
+        (sessionID) => sessionID === childId,
+      ).length;
+
+      terminalReleased = true;
+      terminalEvent.resolve({
+        id: "evt-terminal-cap-reply",
+        type: "permission.replied",
+        properties: { sessionID: childId, requestID: request.id, reply: "once" },
+      });
+      yield* Effect.promise(() => terminalAttempted.promise);
+      yield* advanceTestClock(10_000);
+      const callsAfterCap = runtimeMock.state.sessionGetIds.filter(
+        (sessionID) => sessionID === childId,
+      ).length;
+      NodeAssert.equal(callsAfterCap - askedAttempts, 5);
+
+      yield* advanceTestClock(30_000);
+      NodeAssert.equal(
+        runtimeMock.state.sessionGetIds.filter((sessionID) => sessionID === childId).length,
+        callsAfterCap,
+      );
+      NodeAssert.equal(unexpectedRequestFiber.pollUnsafe(), undefined);
+      yield* Fiber.interrupt(unexpectedRequestFiber);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("reruns recovery when the event stream connects during the startup snapshot", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;

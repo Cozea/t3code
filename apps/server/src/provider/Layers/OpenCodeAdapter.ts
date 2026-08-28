@@ -1631,17 +1631,12 @@ export function makeOpenCodeAdapter(
       event: OpenCodeRoutedRequestEvent,
       raw: unknown = event,
     ) {
-      const requestId =
-        event.type === "permission.asked" || event.type === "question.asked"
-          ? event.properties.id
-          : event.properties.requestID;
+      const isAskedEvent = event.type === "permission.asked" || event.type === "question.asked";
+      const requestId = isAskedEvent ? event.properties.id : event.properties.requestID;
       if (context.requestRelationRetries.has(requestId)) {
         return;
       }
-      if (
-        (event.type === "permission.asked" || event.type === "question.asked") &&
-        context.resolvedRequestIds.has(requestId)
-      ) {
+      if (isAskedEvent && context.resolvedRequestIds.has(requestId)) {
         return;
       }
       const retry: OpenCodeRequestRelationRetry = { warned: false };
@@ -1664,7 +1659,7 @@ export function makeOpenCodeAdapter(
           if (relation.type === "known") {
             context.requestRelationRetries.delete(requestId);
             if (relation.related) {
-              if (event.type === "permission.asked" || event.type === "question.asked") {
+              if (isAskedEvent) {
                 yield* emitPendingOpenCodeRequest(context, event, raw);
               } else {
                 yield* emitTerminalOpenCodeRequest(context, event);
@@ -1688,6 +1683,9 @@ export function makeOpenCodeAdapter(
           }
           const delayMs = Math.min(250 * 2 ** retryCount, 5_000);
           retryCount += 1;
+          if (!isAskedEvent && retryCount >= 5) {
+            return;
+          }
           yield* Effect.sleep(`${delayMs} millis`);
         }
       }).pipe(
