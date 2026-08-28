@@ -580,8 +580,9 @@ describe("MessagesTimeline", () => {
       <MessagesTimeline {...buildProps()} timelineEntries={[entry]} />,
     );
 
-    expect(markup).toContain('href="https://environment.test/api/assets/report.pdf"');
-    expect(markup).toContain('download="report.pdf"');
+    expect(markup).toContain(
+      '<a href="https://environment.test/api/assets/report.pdf" download="report.pdf" class="flex min-w-0 items-center gap-2 rounded-md py-1 text-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70">',
+    );
     expect(markup).not.toContain('alt="report.pdf"');
   });
 
@@ -606,8 +607,9 @@ describe("MessagesTimeline", () => {
       <MessagesTimeline {...buildProps()} timelineEntries={[entry]} />,
     );
 
-    expect(markup).toContain('aria-label="Download report.pdf"');
-    expect(markup).toContain("cursor-pointer");
+    expect(markup).toContain(
+      '<button type="button" aria-label="Download report.pdf" class="flex min-w-0 cursor-pointer items-center gap-2 rounded-md py-1 text-left text-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70">',
+    );
     expect(markup).not.toContain("href=");
   });
 
