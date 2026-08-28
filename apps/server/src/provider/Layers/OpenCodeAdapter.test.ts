@@ -1550,7 +1550,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         },
       });
       yield* Effect.yieldNow;
-      NodeAssert.equal(runtimeMock.state.sessionStatusCalls > 0, true);
+      NodeAssert.equal(runtimeMock.state.sessionStatusCalls, 0);
       steerRelease.resolve(undefined);
       yield* Fiber.join(steerFiber);
 
@@ -1808,6 +1808,249 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       NodeAssert.equal(session?.status, "ready");
       NodeAssert.equal(session?.activeTurnId, undefined);
       NodeAssert.equal(turn.turnId !== undefined, true);
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("uses polled busy status to admit output after a stopped turn", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-polled-busy-after-stop");
+      const firstUserMessageEvent = promiseWithResolvers<unknown>();
+      const assistantMessageEvent = promiseWithResolvers<unknown>();
+      const assistantPartEvent = promiseWithResolvers<unknown>();
+      const idleEvent = promiseWithResolvers<unknown>();
+      const busyStatusPolled = promiseWithResolvers<void>();
+      runtimeMock.state.autoPromptEcho = false;
+      runtimeMock.state.subscribedEvents = [
+        firstUserMessageEvent.promise,
+        assistantMessageEvent.promise,
+        assistantPartEvent.promise,
+        idleEvent.promise,
+      ];
+
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.threadId === threadId &&
+            (event.type === "content.delta" || event.type === "turn.completed"),
+        ),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const stoppedTurn = yield* adapter.sendTurn({
+        threadId,
+        input: "Stop this turn",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("opencode"),
+          "opencode/kimi-k3",
+        ),
+      });
+      const stoppedMessageId = (runtimeMock.state.promptCalls.at(-1) as { messageID: string })
+        .messageID;
+      firstUserMessageEvent.resolve({
+        id: "evt-first-user-before-polled-busy-turn",
+        type: "message.updated",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          info: { id: stoppedMessageId, role: "user" },
+        },
+      });
+      yield* Effect.yieldNow;
+      yield* adapter.interruptTurn(threadId, stoppedTurn.turnId);
+
+      runtimeMock.state.sessionStatusCalls = 0;
+      runtimeMock.state.sessionStatusImplementation = async () => {
+        if (runtimeMock.state.sessionStatusCalls === 1) {
+          busyStatusPolled.resolve(undefined);
+          return {
+            data: { "http://127.0.0.1:9999/session": { type: "busy" as const } },
+          };
+        }
+        return { data: {} };
+      };
+      const activeTurn = yield* adapter.sendTurn({
+        threadId,
+        input: "Run without echo or busy events",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("opencode"),
+          "opencode/kimi-k3",
+        ),
+      });
+      yield* Effect.promise(() => busyStatusPolled.promise);
+      yield* Effect.yieldNow;
+
+      assistantMessageEvent.resolve({
+        id: "evt-assistant-after-polled-busy",
+        type: "message.updated",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          info: { id: "msg-assistant-after-polled-busy", role: "assistant" },
+        },
+      });
+      assistantPartEvent.resolve({
+        id: "evt-part-after-polled-busy",
+        type: "message.part.updated",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          part: {
+            id: "part-after-polled-busy",
+            sessionID: "http://127.0.0.1:9999/session",
+            messageID: "msg-assistant-after-polled-busy",
+            type: "text",
+            text: "Visible output",
+            time: { start: 1 },
+          },
+          time: 1,
+        },
+      });
+      idleEvent.resolve({
+        id: "evt-idle-after-polled-busy",
+        type: "session.status",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          status: { type: "idle" },
+        },
+      });
+
+      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+      NodeAssert.deepEqual(
+        events.map((event) => event.type),
+        ["content.delta", "turn.completed"],
+      );
+      const delta = events[0];
+      if (delta?.type === "content.delta") {
+        NodeAssert.equal(delta.payload.delta, "Visible output");
+      }
+      NodeAssert.equal(events[1]?.turnId, activeTurn.turnId);
+      const sessions = yield* adapter.listSessions();
+      const session = sessions.find((candidate) => candidate.threadId === threadId);
+      NodeAssert.equal(session?.status, "ready");
+      NodeAssert.equal(session?.activeTurnId, undefined);
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("ignores a stale admission status response after the next turn starts", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-stale-admission-status-after-stop");
+      const idleEvent = promiseWithResolvers<unknown>();
+      const userMessageEvent = promiseWithResolvers<unknown>();
+      const staleStatusStarted = promiseWithResolvers<void>();
+      const staleStatusRelease = promiseWithResolvers<void>();
+      const staleStatusReturned = promiseWithResolvers<void>();
+      const activePromptStarted = promiseWithResolvers<void>();
+      const activePromptRelease = promiseWithResolvers<void>();
+      runtimeMock.state.autoPromptEcho = false;
+      runtimeMock.state.subscribedEvents = [idleEvent.promise, userMessageEvent.promise];
+      runtimeMock.state.sessionStatusImplementation = async () => {
+        if (runtimeMock.state.sessionStatusCalls === 1) {
+          staleStatusStarted.resolve(undefined);
+          await staleStatusRelease.promise;
+          staleStatusReturned.resolve(undefined);
+          return {
+            data: { "http://127.0.0.1:9999/session": { type: "busy" as const } },
+          };
+        }
+        return { data: {} };
+      };
+      runtimeMock.state.promptAsyncImplementation = async () => {
+        if (runtimeMock.state.promptCalls.length === 2) {
+          activePromptStarted.resolve(undefined);
+          await activePromptRelease.promise;
+        }
+      };
+
+      const completedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId && event.type === "turn.completed"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const stoppedTurn = yield* adapter.sendTurn({
+        threadId,
+        input: "Stop while status is pending",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("opencode"),
+          "opencode/kimi-k3",
+        ),
+      });
+      yield* Effect.promise(() => staleStatusStarted.promise);
+      yield* adapter.interruptTurn(threadId, stoppedTurn.turnId);
+
+      const activeTurnFiber = yield* adapter
+        .sendTurn({
+          threadId,
+          input: "Start while the old status is pending",
+          modelSelection: createModelSelection(
+            ProviderInstanceId.make("opencode"),
+            "opencode/kimi-k3",
+          ),
+        })
+        .pipe(Effect.forkChild);
+      yield* Effect.promise(() => activePromptStarted.promise);
+      const activeMessageId = (runtimeMock.state.promptCalls.at(-1) as { messageID: string })
+        .messageID;
+
+      staleStatusRelease.resolve(undefined);
+      yield* Effect.promise(() => staleStatusReturned.promise);
+      for (let index = 0; index < 2; index += 1) {
+        yield* Effect.yieldNow;
+      }
+      idleEvent.resolve({
+        id: "evt-idle-after-stale-admission-status",
+        type: "session.status",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          status: { type: "idle" },
+        },
+      });
+      for (let index = 0; index < 4; index += 1) {
+        yield* Effect.yieldNow;
+      }
+      NodeAssert.equal(activeTurnFiber.pollUnsafe(), undefined);
+      NodeAssert.equal(completedFiber.pollUnsafe(), undefined);
+      const sessionsBeforeAcceptance = yield* adapter.listSessions();
+      const sessionBeforeAcceptance = sessionsBeforeAcceptance.find(
+        (candidate) => candidate.threadId === threadId,
+      );
+      NodeAssert.equal(sessionBeforeAcceptance?.status, "running");
+      NodeAssert.notEqual(sessionBeforeAcceptance?.activeTurnId, stoppedTurn.turnId);
+
+      userMessageEvent.resolve({
+        id: "evt-user-after-stale-admission-status",
+        type: "message.updated",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          info: { id: activeMessageId, role: "user" },
+        },
+      });
+      yield* Effect.yieldNow;
+      activePromptRelease.resolve(undefined);
+      const activeTurn = yield* Fiber.join(activeTurnFiber);
+      yield* advanceTestClock(250);
+
+      const completed = Option.getOrUndefined(
+        yield* Fiber.join(completedFiber).pipe(Effect.timeout("1 second")),
+      );
+      NodeAssert.equal(completed?.turnId, activeTurn.turnId);
+      const sessions = yield* adapter.listSessions();
+      const session = sessions.find((candidate) => candidate.threadId === threadId);
+      NodeAssert.equal(session?.status, "ready");
+      NodeAssert.equal(session?.activeTurnId, undefined);
 
       yield* adapter.stopSession(threadId);
     }),
@@ -3092,6 +3335,9 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         .interruptTurn(threadId, turn.turnId)
         .pipe(Effect.result, Effect.forkChild);
       yield* Effect.promise(() => abortStarted.promise);
+      NodeAssert.equal(runtimeMock.state.abortCalls.length, 1);
+      NodeAssert.equal(runtimeMock.state.abortSignals.length, 1);
+      const abortSignal = runtimeMock.state.abortSignals[0];
       const secondInterrupt = yield* adapter
         .interruptTurn(threadId, turn.turnId)
         .pipe(Effect.result, Effect.forkChild);
@@ -3106,6 +3352,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         })
         .pipe(Effect.result, Effect.forkChild);
       yield* Effect.yieldNow;
+      NodeAssert.equal(runtimeMock.state.abortCalls.length, 1);
 
       yield* advanceTestClock(9_999);
       NodeAssert.equal(firstInterrupt.pollUnsafe(), undefined);
@@ -3126,9 +3373,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
           "OpenCode session abort did not complete within 10 seconds.",
         );
       }
-      NodeAssert.equal(runtimeMock.state.abortCalls.length, 1);
-      NodeAssert.equal(runtimeMock.state.abortSignals.length, 1);
-      NodeAssert.equal(runtimeMock.state.abortSignals[0]?.aborted, true);
+      NodeAssert.equal(abortSignal?.aborted, true);
       NodeAssert.equal(unexpectedEventFiber.pollUnsafe(), undefined);
 
       runtimeMock.state.abortImplementation = null;

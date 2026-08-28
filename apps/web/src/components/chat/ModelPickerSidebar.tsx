@@ -173,7 +173,7 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                 disabled={isDisabled}
                 type="button"
                 aria-label={
-                  isUnavailable
+                  isUnavailable || isContextDisabled
                     ? tooltip
                     : showNewBadge
                       ? `${entry.displayName}, new`

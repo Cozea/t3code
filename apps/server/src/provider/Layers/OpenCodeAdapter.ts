@@ -1199,6 +1199,17 @@ export function makeOpenCodeAdapter(
                 { signal },
               ),
             ).pipe(Effect.timeout("1 second"), Effect.option);
+            const stopped = yield* Ref.get(context.stopped);
+            if (
+              stopped ||
+              sessions.get(context.session.threadId) !== context ||
+              context.promptAdmission !== promptAdmission ||
+              context.activeTurnId !== promptAdmission.turnId ||
+              context.promptGeneration !== promptAdmission.generation ||
+              promptAdmission.cancelled
+            ) {
+              return;
+            }
             const message = Option.isSome(response) ? response.value.data : undefined;
             if (message?.info.id === promptAdmission.messageId && message.info.role === "user") {
               promptAdmission.messageObserved = true;
@@ -1209,6 +1220,17 @@ export function makeOpenCodeAdapter(
           const statusResponse = yield* runOpenCodeSdk("session.status", (signal) =>
             context.client.session.status(undefined, { signal }),
           ).pipe(Effect.timeout("1 second"), Effect.option);
+          const stopped = yield* Ref.get(context.stopped);
+          if (
+            stopped ||
+            sessions.get(context.session.threadId) !== context ||
+            context.promptAdmission !== promptAdmission ||
+            context.activeTurnId !== promptAdmission.turnId ||
+            context.promptGeneration !== promptAdmission.generation ||
+            promptAdmission.cancelled
+          ) {
+            return;
+          }
           const statusData = Option.isSome(statusResponse)
             ? Option.getOrUndefined(decodeOpenCodeSessionStatusMap(statusResponse.value.data))
             : undefined;
@@ -1219,6 +1241,7 @@ export function makeOpenCodeAdapter(
           if (isBusy) {
             promptAdmission.busyObserved = true;
             promptAdmission.idleStatusConfirmations = 0;
+            context.awaitingBusyAfterInterruption = false;
             context.promptAdmission = undefined;
             return;
           }
