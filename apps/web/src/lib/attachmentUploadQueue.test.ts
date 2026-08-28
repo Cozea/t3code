@@ -326,6 +326,83 @@ describe("attachmentUploadQueue", () => {
     }
   });
 
+  it("persists a pending upload on the same-environment draft that receives its file", async () => {
+    const source = scopeThreadRef(firstEnvironment, ThreadId.make("thread-background-move-source"));
+    const destination = scopeThreadRef(
+      firstEnvironment,
+      ThreadId.make("thread-background-move-destination"),
+    );
+    const file = makeFile("background-move");
+    const store = useComposerDraftStore.getState();
+    store.addFiles(source, [file]);
+
+    try {
+      startAttachmentUpload({
+        environmentId: firstEnvironment,
+        image: file,
+        draftTarget: source,
+      });
+      await Promise.resolve();
+      store.moveComposerPromptAndImages(source, destination);
+      const sourceAfterMove = store.getComposerDraft(source);
+
+      // The destination never starts the existing job again. Its completion
+      // must find the file in current store state instead of the captured row.
+      const settled = awaitAttachmentUploads([file.id]);
+      TestXmlHttpRequest.requests[0]!.complete();
+      await settled;
+
+      expect(store.getComposerDraft(source)).toEqual(sourceAfterMove);
+      expect(store.getComposerDraft(destination)?.files).toMatchObject([
+        {
+          id: file.id,
+          uploadedAttachmentId: "pending-environment-1-background-move.pdf",
+          uploadEnvironmentId: firstEnvironment,
+        },
+      ]);
+    } finally {
+      store.clearComposerContent(source);
+      store.clearComposerContent(destination);
+    }
+  });
+
+  it("does not stamp an old-environment upload after its file moves environments", async () => {
+    const source = scopeThreadRef(
+      firstEnvironment,
+      ThreadId.make("thread-cross-environment-source"),
+    );
+    const destination = scopeThreadRef(
+      secondEnvironment,
+      ThreadId.make("thread-cross-environment-destination"),
+    );
+    const file = makeFile("cross-environment-move");
+    const store = useComposerDraftStore.getState();
+    store.addFiles(source, [file]);
+
+    try {
+      startAttachmentUpload({
+        environmentId: firstEnvironment,
+        image: file,
+        draftTarget: source,
+      });
+      await Promise.resolve();
+      store.moveComposerPromptAndImages(source, destination);
+
+      const settled = awaitAttachmentUploads([file.id]);
+      TestXmlHttpRequest.requests[0]!.complete();
+      await settled;
+
+      expect(store.getComposerDraft(source)).toBeNull();
+      const movedFile = store.getComposerDraft(destination)?.files[0];
+      expect(movedFile?.id).toBe(file.id);
+      expect(movedFile?.uploadedAttachmentId).toBeUndefined();
+      expect(movedFile?.uploadEnvironmentId).toBeUndefined();
+    } finally {
+      store.clearComposerContent(source);
+      store.clearComposerContent(destination);
+    }
+  });
+
   it("verifies an uploaded file reference before restoring it", async () => {
     const file: ComposerFileAttachment = {
       ...makeFile("restored"),

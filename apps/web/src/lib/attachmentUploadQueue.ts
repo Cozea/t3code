@@ -3,6 +3,7 @@ import {
   type ChatAttachment,
   type EnvironmentId,
 } from "@t3tools/contracts";
+import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
 import {
   deletePendingAttachmentUpload,
@@ -13,6 +14,7 @@ import {
 import { create } from "zustand";
 
 import {
+  DraftId,
   useComposerDraftStore,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
@@ -39,8 +41,8 @@ interface UploadJob {
   readonly image: ComposerImageAttachment | ComposerFileAttachment;
   readonly environmentId: EnvironmentId;
   /**
-   * The draft that owns this file, so a completion can persist its upload
-   * ids even when no composer is mounted to observe it.
+   * The draft that owned this file when the job started. Completion resolves
+   * the current owner because the file can move while the upload is pending.
    */
   readonly draftTarget?: ComposerThreadTarget;
   readonly previous?: ReadyAttachmentUpload;
@@ -83,6 +85,36 @@ export function readAttachmentUpload(imageId: string): AttachmentUploadState | u
   return useAttachmentUploadStore.getState().uploadsByImageId[imageId];
 }
 
+/** Finds the file's current same-environment draft after any in-flight move. */
+function resolveCurrentFileDraftTarget(job: UploadJob): ComposerThreadTarget | undefined {
+  if (job.draftTarget === undefined || job.image.type !== "file") {
+    return undefined;
+  }
+  const store = useComposerDraftStore.getState();
+  for (const [key, draft] of Object.entries(store.draftsByThreadKey)) {
+    if (!draft.files.some((file) => file.id === job.image.id)) {
+      continue;
+    }
+    const draftSession = store.draftThreadsByThreadKey[key];
+    if (draftSession !== undefined) {
+      if (draftSession.environmentId === job.environmentId) {
+        return DraftId.make(key);
+      }
+      continue;
+    }
+    // Tests and legacy callers can use a DraftId without session metadata.
+    // Only its original job supplies enough environment identity to trust it.
+    if (typeof job.draftTarget === "string" && job.draftTarget === key) {
+      return DraftId.make(key);
+    }
+    const threadRef = parseScopedThreadKey(key);
+    if (threadRef?.environmentId === job.environmentId) {
+      return threadRef;
+    }
+  }
+  return undefined;
+}
+
 /**
  * Persists a finished upload's ids onto the draft that owns the file. The
  * mounted composer effect performs the same write for live UI updates, but a
@@ -91,12 +123,13 @@ export function readAttachmentUpload(imageId: string): AttachmentUploadState | u
  * the draft row is gone or already carries these ids.
  */
 function stampDraftFileUpload(job: UploadJob, attachmentId: string): void {
-  if (job.draftTarget === undefined || job.image.type !== "file") {
+  const draftTarget = resolveCurrentFileDraftTarget(job);
+  if (draftTarget === undefined) {
     return;
   }
   useComposerDraftStore
     .getState()
-    .setFileUpload(job.draftTarget, job.image.id, job.environmentId, attachmentId);
+    .setFileUpload(draftTarget, job.image.id, job.environmentId, attachmentId);
 }
 
 function deletePendingUpload(environmentId: EnvironmentId, attachmentId: string): void {
@@ -160,22 +193,22 @@ async function runUpload(job: UploadJob): Promise<void> {
       stampDraftFileUpload(job, job.persistedAttachmentId);
       return;
     }
-    if (
-      verification.status === "missing" &&
-      !job.image.file &&
-      job.draftTarget !== undefined &&
-      job.image.type === "file" &&
-      useComposerDraftStore
-        .getState()
-        .markFileUploadMissing(
-          job.draftTarget,
-          job.image.id,
-          job.environmentId,
-          job.persistedAttachmentId,
-        )
-    ) {
-      clearUploadState(job.image.id);
-      return;
+    if (verification.status === "missing" && !job.image.file && job.image.type === "file") {
+      const draftTarget = resolveCurrentFileDraftTarget(job);
+      if (
+        draftTarget !== undefined &&
+        useComposerDraftStore
+          .getState()
+          .markFileUploadMissing(
+            draftTarget,
+            job.image.id,
+            job.environmentId,
+            job.persistedAttachmentId,
+          )
+      ) {
+        clearUploadState(job.image.id);
+        return;
+      }
     }
     if (verification.status === "failed" || !job.image.file) {
       // No `attachmentId` here: a failed state's id marks a pending upload

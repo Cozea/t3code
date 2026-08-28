@@ -66,7 +66,7 @@ describe("composer attachment files", () => {
     expect(inferImageMimeTypeFromName("archive.zip")).toBeNull();
   });
 
-  it("keeps persisted hydrated uploads when the upload capability flips off", () => {
+  it("keeps draft-persisted file uploads when the upload capability flips off", () => {
     const environmentId = EnvironmentId.make("environment-1");
     const image: ComposerImageAttachment = {
       type: "image",
@@ -95,11 +95,18 @@ describe("composer attachment files", () => {
       uploadedAttachmentId: "pending-report-pdf",
       uploadEnvironmentId: environmentId,
     };
+    const uploadedLocalFile: ComposerFileAttachment = {
+      ...uploadingFile,
+      id: "file-uploaded-local",
+      uploadedAttachmentId: "pending-fresh-pdf",
+      uploadEnvironmentId: environmentId,
+    };
 
     const released = attachmentsToReleaseOnUploadCapabilityLoss([
       image,
       uploadingFile,
       hydratedFile,
+      uploadedLocalFile,
     ]);
 
     expect(released.map((attachment) => attachment.id)).toEqual(["image-1", "file-uploading"]);

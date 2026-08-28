@@ -44,10 +44,11 @@ export function classifyComposerAttachmentFile(
 
 /**
  * When `capabilities.attachmentUploads` flips off (reconnect, version skew),
- * only uploads whose lifecycle this composer owns are torn down: attachments
- * still backed by a local `File`. A persisted upload is the only copy of a
- * hydrated file's bytes, so a capability flap must not delete it out from
- * under the draft that still references it.
+ * tear down only uploads that have not been persisted onto a draft file.
+ * Once `uploadedAttachmentId` is stamped, the draft references that server
+ * copy after reload even if its local `File` is still available in memory.
+ * Explicit attachment removal releases persisted uploads through
+ * `releaseDraftAttachment`.
  */
 export function attachmentsToReleaseOnUploadCapabilityLoss(
   attachments: ReadonlyArray<ComposerImageAttachment | ComposerFileAttachment>,
