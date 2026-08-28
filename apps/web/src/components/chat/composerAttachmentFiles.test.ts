@@ -39,6 +39,23 @@ describe("composer attachment files", () => {
     ).toBe(false);
   });
 
+  it("claims unsupported image pastes so the composer can report them", () => {
+    const images = [
+      new File(["svg"], "diagram.svg", { type: "image/svg+xml" }),
+      new File(["tiff"], "photo.tiff", { type: "image/tiff" }),
+    ];
+
+    for (const image of images) {
+      expect(
+        shouldHandleComposerAttachmentPaste({
+          files: [image],
+          plainText: "Image caption",
+          maxFileAttachmentBytes: null,
+        }),
+      ).toBe(true);
+    }
+  });
+
   it("only claims generic file pastes accepted by the current server", () => {
     const file = new File(["report"], "report.pdf", { type: "application/pdf" });
     const input = {

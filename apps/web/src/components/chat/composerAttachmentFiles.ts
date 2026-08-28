@@ -70,7 +70,12 @@ export function shouldHandleComposerAttachmentPaste(input: {
   readonly plainText: string;
   readonly maxFileAttachmentBytes: number | null;
 }): boolean {
-  if (input.files.some((file) => classifyComposerAttachmentFile(file) === "image")) {
+  if (
+    input.files.some((file) => {
+      const classification = classifyComposerAttachmentFile(file);
+      return classification === "image" || classification === "unsupported-image";
+    })
+  ) {
     return true;
   }
 
