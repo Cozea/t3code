@@ -692,8 +692,8 @@ const failPendingOpenCodeCancellation = Effect.fn("failPendingOpenCodeCancellati
 });
 
 const abortOpenCodeSessionForTeardown = (context: OpenCodeSessionContext) =>
-  runOpenCodeSdk("session.abort", () =>
-    context.client.session.abort({ sessionID: context.openCodeSessionId }),
+  runOpenCodeSdk("session.abort", (signal) =>
+    context.client.session.abort({ sessionID: context.openCodeSessionId }, { signal }),
   ).pipe(Effect.timeout("1 second"), Effect.ignore({ log: true }));
 
 const closeStartingOpenCodeContext = Effect.fn("closeStartingOpenCodeContext")(function* (

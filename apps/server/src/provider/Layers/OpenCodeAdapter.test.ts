@@ -587,6 +587,38 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
+  it.effect("aborts a held teardown request before closing the session scope", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-teardown-timeout");
+      const abortStarted = promiseWithResolvers<void>();
+      runtimeMock.state.abortImplementation = async () => {
+        abortStarted.resolve(undefined);
+        await new Promise<void>(() => {});
+      };
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const stopFiber = yield* adapter.stopSession(threadId).pipe(Effect.forkChild);
+      yield* Effect.promise(() => abortStarted.promise);
+
+      yield* advanceTestClock(999);
+      NodeAssert.equal(stopFiber.pollUnsafe(), undefined);
+      NodeAssert.equal(runtimeMock.state.abortSignals.length, 1);
+      NodeAssert.equal(runtimeMock.state.abortSignals[0]?.aborted, false);
+      NodeAssert.deepEqual(runtimeMock.state.closeCalls, []);
+
+      yield* advanceTestClock(1);
+      yield* Fiber.join(stopFiber);
+      NodeAssert.equal(runtimeMock.state.abortSignals[0]?.aborted, true);
+      NodeAssert.deepEqual(runtimeMock.state.closeCalls, ["http://127.0.0.1:9999"]);
+      NodeAssert.equal(yield* adapter.hasSession(threadId), false);
+    }),
+  );
+
   it.effect("stopAll closes a connecting session and releases startup", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
