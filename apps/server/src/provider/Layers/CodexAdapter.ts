@@ -231,6 +231,7 @@ function toCanonicalItemType(raw: string | undefined | null): CanonicalItemType 
   if (type.includes("dynamic tool")) return "dynamic_tool_call";
   if (type.includes("collab")) return "collab_agent_tool_call";
   if (type.includes("web search")) return "web_search";
+  if (type.includes("image generation")) return "image_generation";
   if (type.includes("image")) return "image_view";
   if (type.includes("review entered")) return "review_entered";
   if (type.includes("review exited")) return "review_exited";
@@ -262,6 +263,8 @@ function itemTitle(itemType: CanonicalItemType, item?: CodexLifecycleItem): stri
       return "Tool call";
     case "web_search":
       return "Web search";
+    case "image_generation":
+      return "Generating image";
     case "image_view":
       return "Image view";
     case "error":

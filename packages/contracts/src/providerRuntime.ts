@@ -109,6 +109,7 @@ export const TOOL_LIFECYCLE_ITEM_TYPES = [
   "dynamic_tool_call",
   "collab_agent_tool_call",
   "web_search",
+  "image_generation",
   "image_view",
 ] as const;
 

@@ -17,6 +17,10 @@ export const AssetResource = Schema.Union([
   Schema.TaggedStruct("attachment", {
     attachmentId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
   }),
+  Schema.TaggedStruct("thread-artifact", {
+    threadId: ThreadId,
+    artifactId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  }),
   Schema.TaggedStruct("project-favicon", {
     cwd: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
     // A cache-key hint only. The server reads the authoritative path from the
@@ -179,6 +183,29 @@ export class AssetAttachmentNotFoundError extends Schema.TaggedErrorClass<AssetA
   }
 }
 
+export class AssetThreadArtifactNotFoundError extends Schema.TaggedErrorClass<AssetThreadArtifactNotFoundError>()(
+  "AssetThreadArtifactNotFoundError",
+  {
+    resource: AssetResource,
+  },
+) {
+  override get message(): string {
+    return "Generated thread artifact was not found.";
+  }
+}
+
+export class AssetThreadArtifactInspectionError extends Schema.TaggedErrorClass<AssetThreadArtifactInspectionError>()(
+  "AssetThreadArtifactInspectionError",
+  {
+    resource: AssetResource,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return "Failed to inspect the generated thread artifact.";
+  }
+}
+
 export class AssetProjectFaviconResolutionError extends Schema.TaggedErrorClass<AssetProjectFaviconResolutionError>()(
   "AssetProjectFaviconResolutionError",
   {
@@ -236,6 +263,8 @@ export const AssetAccessError = Schema.Union([
   AssetWorkspaceAssetNotFoundError,
   AssetWorkspaceResolutionError,
   AssetAttachmentNotFoundError,
+  AssetThreadArtifactNotFoundError,
+  AssetThreadArtifactInspectionError,
   AssetProjectFaviconResolutionError,
   AssetProjectFaviconInspectionError,
   AssetProjectFaviconNotFoundError,

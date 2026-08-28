@@ -162,6 +162,75 @@ function summarizeToolTextOutput(value: string): string | null {
   return null;
 }
 
+const ARTIFACT_TITLE_MAX_LENGTH = 120;
+const ARTIFACT_PROMPT_MAX_LENGTH = 2_000;
+
+function boundedText(value: unknown, maxLength: number): string | null {
+  const text = asTrimmedString(value);
+  if (!text) return null;
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function imageArtifactTitle(prompt: string | null): string | null {
+  if (!prompt) return null;
+  const assetType = /^\s*Asset type:\s*(.+)$/imu.exec(prompt)?.[1]?.trim();
+  const primaryRequest = /^\s*Primary request:\s*(.+)$/imu.exec(prompt)?.[1]?.trim();
+  const candidate = assetType || primaryRequest || prompt.split(/\r?\n/u)[0]?.trim();
+  if (!candidate) return null;
+  return candidate.length <= ARTIFACT_TITLE_MAX_LENGTH
+    ? candidate
+    : `${candidate.slice(0, ARTIFACT_TITLE_MAX_LENGTH - 1).trimEnd()}…`;
+}
+
+function imageMimeType(result: unknown): string | null {
+  if (typeof result !== "string") return null;
+  if (result.startsWith("data:image/png;base64,")) return "image/png";
+  if (result.startsWith("data:image/jpeg;base64,")) return "image/jpeg";
+  if (result.startsWith("data:image/webp;base64,")) return "image/webp";
+  if (result.startsWith("data:image/gif;base64,")) return "image/gif";
+  if (result.startsWith("iVBOR")) return "image/png";
+  if (result.startsWith("/9j/")) return "image/jpeg";
+  if (result.startsWith("UklGR")) return "image/webp";
+  if (result.startsWith("R0lGOD")) return "image/gif";
+  return null;
+}
+
+function projectImageGenerationData(
+  payload: Record<string, unknown>,
+  data: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const item = asRecord(data.item);
+  if (payload.itemType !== "image_generation" && item?.type !== "imageGeneration") return null;
+
+  const input = asRecord(item?.input) ?? asRecord(data.input);
+  const argumentsRecord = asRecord(item?.arguments) ?? asRecord(data.arguments);
+  const prompt = boundedText(
+    item?.revisedPrompt ?? item?.prompt ?? data.prompt ?? input?.prompt ?? argumentsRecord?.prompt,
+    ARTIFACT_PROMPT_MAX_LENGTH,
+  );
+  const artifactId =
+    asTrimmedString(payload.toolCallId) ??
+    asTrimmedString(item?.id) ??
+    asTrimmedString(data.toolCallId);
+  if (!artifactId) return null;
+
+  const result = item?.result;
+  const status = asTrimmedString(payload.status) ?? asTrimmedString(item?.status) ?? "inProgress";
+  const title = imageArtifactTitle(prompt);
+  const mimeType = imageMimeType(result);
+  return {
+    artifact: {
+      id: artifactId,
+      kind: "image",
+      status,
+      ...(title ? { title } : {}),
+      ...(prompt ? { prompt } : {}),
+      ...(mimeType ? { mimeType } : {}),
+      available: status === "completed" && asTrimmedString(item?.savedPath) !== null,
+    },
+  };
+}
+
 /**
  * Fields of an MCP tool-call item both clients render in the expanded
  * work-log row. Everything else — notably `result`, which carries the full
@@ -348,6 +417,18 @@ export function projectActivityPayload(
       ? { ...payload, status: itemStatus }
       : payload;
 
+  const imageGenerationData = projectImageGenerationData(payload, data);
+  if (imageGenerationData) {
+    return {
+      ...activity,
+      payload: {
+        ...projectedPayload,
+        itemType: "image_generation",
+        data: imageGenerationData,
+      },
+    };
+  }
+
   if (payload.itemType === "mcp_tool_call") {
     return {
       ...activity,
@@ -470,7 +551,7 @@ function toolLifecycleIdentity(activity: OrchestrationThreadActivity): string | 
   if (itemType.length === 0 && label.length === 0 && detail.length === 0) {
     return null;
   }
-  return [itemType, label, detail].join("");
+  return [itemType, label, detail].join("\u001f");
 }
 
 /**
@@ -517,7 +598,7 @@ function dropSupersededToolUpdatedActivities(
     if (!identity) {
       continue;
     }
-    const key = `${activity.turnId ?? ""} ${identity}`;
+    const key = `${activity.turnId ?? ""}\u0000${identity}`;
     const indices = completionIndicesByKey.get(key);
     if (indices) {
       indices.push(index);
@@ -537,7 +618,7 @@ function dropSupersededToolUpdatedActivities(
     if (!identity) {
       return true;
     }
-    const indices = completionIndicesByKey.get(`${activity.turnId ?? ""} ${identity}`);
+    const indices = completionIndicesByKey.get(`${activity.turnId ?? ""}\u0000${identity}`);
     return !indices?.some((completionIndex) => completionIndex > index);
   });
 }

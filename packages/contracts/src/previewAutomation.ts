@@ -43,6 +43,9 @@ export const PREVIEW_AUTOMATION_OPERATIONS = [
   ...PREVIEW_AUTOMATION_V1_OPERATIONS,
   "resize",
   "setColorScheme",
+  "devServerStatus",
+  "devServerEnsure",
+  "devServerAttach",
 ] as const;
 
 export const PreviewAutomationOperation = Schema.Literals(PREVIEW_AUTOMATION_OPERATIONS);
@@ -76,6 +79,56 @@ export const PreviewAutomationStatus = Schema.Struct({
   viewport: Schema.optional(PreviewRenderedViewportSize),
 });
 export type PreviewAutomationStatus = typeof PreviewAutomationStatus.Type;
+
+export const DevServerAutomationInput = Schema.Struct({
+  ...PreviewAutomationTabTargetFields,
+  command: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(1024)).annotate({
+      description:
+        "Optional launch command when project detection cannot choose one. Use {port} where the brokered port must be inserted, for example python3 -m http.server {port}.",
+    }),
+  ).annotate({
+    description:
+      "Optional launch command when project detection cannot choose one. Use {port} where the brokered port must be inserted.",
+  }),
+  port: Schema.optional(
+    Schema.Int.check(Schema.isGreaterThan(0)).check(Schema.isLessThan(65_536)).annotate({
+      description:
+        "Preferred local port for command. The port broker may choose another free port, so custom commands should use the {port} placeholder.",
+    }),
+  ).annotate({
+    description:
+      "Preferred local port. Custom commands should use {port} so port brokerage remains authoritative.",
+  }),
+  open: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "Reveal a reused Dev Server surface. Newly created agent surfaces remain background tabs until selected by the user.",
+    }),
+  ),
+  reuseExistingSurface: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "Reuse an unleased Dev Server surface when possible. Defaults to true; false creates another view without another process.",
+    }),
+  ),
+}).annotate({
+  description:
+    "Selects or creates a Dev Server surface for the current thread without targeting ordinary browser tiles.",
+});
+export type DevServerAutomationInput = typeof DevServerAutomationInput.Type;
+
+export const DevServerAutomationStatus = Schema.Struct({
+  running: Schema.Boolean,
+  ready: Schema.Boolean,
+  port: Schema.NullOr(Schema.Int),
+  runId: Schema.NullOr(Schema.String),
+  phase: Schema.NullOr(Schema.Literals(["bootstrapping", "launching", "running"])),
+  headless: Schema.Boolean,
+  reusedProcess: Schema.Boolean,
+  surface: PreviewAutomationStatus,
+});
+export type DevServerAutomationStatus = typeof DevServerAutomationStatus.Type;
 
 export const PreviewAutomationOpenInput = Schema.Struct({
   ...PreviewAutomationTabTargetFields,

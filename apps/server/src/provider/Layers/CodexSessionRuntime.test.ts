@@ -508,6 +508,8 @@ describe("T3 browser developer instructions", () => {
       NodeAssert.match(instructions, /t3-code/);
       NodeAssert.match(instructions, /preview_status/);
       NodeAssert.match(instructions, /preview_open/);
+      NodeAssert.match(instructions, /call `dev_server_ensure` before using any shell/);
+      NodeAssert.match(instructions, /Omit `command` unless the user explicitly supplied/);
       NodeAssert.match(instructions, /Do not switch to global browser skills/);
     }
   });
@@ -519,6 +521,7 @@ describe("T3 browser developer instructions", () => {
     ]) {
       NodeAssert.doesNotMatch(instructions, /preview_status/);
       NodeAssert.doesNotMatch(instructions, /preview_open/);
+      NodeAssert.doesNotMatch(instructions, /dev_server_ensure/);
       NodeAssert.doesNotMatch(instructions, /T3 Code collaborative browser/);
       // Steering away from other browser automation must go with the tools;
       // keeping it would leave the model talked out of its only option.

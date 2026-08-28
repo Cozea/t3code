@@ -755,6 +755,17 @@ function classifyToolItemType(toolName: string): CanonicalItemType {
     return "command_execution";
   }
   if (
+    normalized.includes("imagegen") ||
+    normalized.includes("image_gen") ||
+    (normalized.includes("image") &&
+      (normalized.includes("generate") || normalized.includes("create")))
+  ) {
+    return "image_generation";
+  }
+  if (normalized.includes("image")) {
+    return "image_view";
+  }
+  if (
     normalized.includes("edit") ||
     normalized.includes("write") ||
     normalized.includes("file") ||
@@ -770,9 +781,6 @@ function classifyToolItemType(toolName: string): CanonicalItemType {
   }
   if (normalized.includes("websearch") || normalized.includes("web search")) {
     return "web_search";
-  }
-  if (normalized.includes("image")) {
-    return "image_view";
   }
   return "dynamic_tool_call";
 }
@@ -1225,6 +1233,8 @@ function titleForTool(itemType: CanonicalItemType): string {
       return "Subagent task";
     case "web_search":
       return "Web search";
+    case "image_generation":
+      return "Generating image";
     case "image_view":
       return "Image view";
     case "dynamic_tool_call":

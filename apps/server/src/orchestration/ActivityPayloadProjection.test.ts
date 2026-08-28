@@ -206,4 +206,100 @@ describe("projectActivityPayload", () => {
     const projected = projectActivityPayload(source);
     expect(projected.payload).toEqual(source.payload);
   });
+
+  it("projects generated images to bounded metadata without bytes or paths", () => {
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "image_view",
+        toolCallId: "image-call-1",
+        status: "completed",
+        data: {
+          item: {
+            type: "imageGeneration",
+            id: "image-call-1",
+            status: "completed",
+            revisedPrompt: `Asset type: Product hero\nPrimary request: ${"bright shrimp ".repeat(300)}`,
+            result: `iVBOR${"A".repeat(20_000)}`,
+            savedPath: "/private/tmp/generated-hero.png",
+          },
+        },
+      }),
+    );
+
+    expect(projected.payload).toMatchObject({
+      itemType: "image_generation",
+      toolCallId: "image-call-1",
+      data: {
+        artifact: {
+          id: "image-call-1",
+          kind: "image",
+          status: "completed",
+          title: "Product hero",
+          mimeType: "image/png",
+          available: true,
+        },
+      },
+    });
+    const serialized = JSON.stringify(projected.payload);
+    expect(serialized).not.toContain("savedPath");
+    expect(serialized).not.toContain("iVBOR");
+    expect(serialized.length).toBeLessThan(2_500);
+  });
+
+  it("keeps image generation starts generic when the provider has no prompt yet", () => {
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "image_generation",
+        toolCallId: "image-call-2",
+        status: "inProgress",
+        data: {
+          item: {
+            type: "imageGeneration",
+            id: "image-call-2",
+            status: "inProgress",
+            revisedPrompt: null,
+            result: "",
+          },
+        },
+      }),
+    );
+
+    expect(projected.payload).toMatchObject({
+      itemType: "image_generation",
+      data: {
+        artifact: {
+          id: "image-call-2",
+          status: "inProgress",
+          available: false,
+        },
+      },
+    });
+  });
+
+  it("uses provider tool arguments for image titles without claiming unavailable media", () => {
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "image_generation",
+        toolCallId: "image-call-3",
+        status: "completed",
+        data: {
+          arguments: {
+            prompt: "A watercolor lighthouse at dusk",
+          },
+        },
+      }),
+    );
+
+    expect(projected.payload).toMatchObject({
+      itemType: "image_generation",
+      data: {
+        artifact: {
+          id: "image-call-3",
+          title: "A watercolor lighthouse at dusk",
+          prompt: "A watercolor lighthouse at dusk",
+          available: false,
+        },
+      },
+    });
+  });
 });

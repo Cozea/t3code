@@ -1150,6 +1150,59 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
+  it.effect("maps OpenCode reasoning parts to canonical reasoning deltas", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-reasoning");
+      runtimeMock.state.subscribedEvents = [
+        {
+          type: "message.updated",
+          properties: {
+            sessionID: "http://127.0.0.1:9999/session",
+            info: {
+              id: "msg-reasoning",
+              role: "assistant",
+            },
+          },
+        },
+        {
+          type: "message.part.updated",
+          properties: {
+            sessionID: "http://127.0.0.1:9999/session",
+            part: {
+              id: "part-reasoning",
+              sessionID: "http://127.0.0.1:9999/session",
+              messageID: "msg-reasoning",
+              type: "reasoning",
+              text: "private reasoning",
+              time: { start: 1 },
+            },
+            time: 1,
+          },
+        },
+      ];
+      const eventFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId && event.type === "content.delta"),
+        Stream.take(1),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      const event = yield* Fiber.join(eventFiber).pipe(Effect.timeout("1 second"));
+      NodeAssert.equal(Option.isSome(event), true);
+      if (Option.isSome(event) && event.value.type === "content.delta") {
+        NodeAssert.equal(event.value.payload.streamKind, "reasoning_text");
+        NodeAssert.equal(event.value.payload.delta, "private reasoning");
+      }
+    }),
+  );
+
   it.effect("lets OpenCode own session title generation and emits title metadata updates", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;

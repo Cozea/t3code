@@ -306,6 +306,17 @@ function toToolLifecycleItemType(toolName: string): ToolLifecycleItemType {
     return "command_execution";
   }
   if (
+    normalized.includes("imagegen") ||
+    normalized.includes("image_gen") ||
+    (normalized.includes("image") &&
+      (normalized.includes("generate") || normalized.includes("create")))
+  ) {
+    return "image_generation";
+  }
+  if (normalized.includes("image")) {
+    return "image_view";
+  }
+  if (
     normalized.includes("edit") ||
     normalized.includes("write") ||
     normalized.includes("patch") ||
@@ -318,9 +329,6 @@ function toToolLifecycleItemType(toolName: string): ToolLifecycleItemType {
   }
   if (normalized.includes("mcp")) {
     return "mcp_tool_call";
-  }
-  if (normalized.includes("image")) {
-    return "image_view";
   }
   if (
     normalized.includes("task") ||

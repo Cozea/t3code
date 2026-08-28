@@ -6,6 +6,8 @@ import {
   AssetProjectFaviconNotFoundError,
   AssetProjectFaviconResolutionError,
   AssetSigningKeyLoadError,
+  AssetThreadArtifactInspectionError,
+  AssetThreadArtifactNotFoundError,
   AssetWorkspaceAssetInspectionError,
   AssetWorkspaceAssetNotFoundError,
   AssetWorkspaceContextNotFoundError,
@@ -83,6 +85,14 @@ const AssetClaimsSchema = Schema.Union([
   }),
   Schema.Struct({
     version: Schema.Literal(1),
+    kind: Schema.Literal("thread-artifact-file"),
+    threadId: Schema.String,
+    artifactId: Schema.String,
+    filePath: Schema.String,
+    expiresAt: Schema.Number,
+  }),
+  Schema.Struct({
+    version: Schema.Literal(1),
     kind: Schema.Literal("project-favicon"),
     workspaceRoot: Schema.String,
     relativePath: Schema.NullOr(Schema.String),
@@ -117,6 +127,35 @@ function decodeRelativePath(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asTrimmedString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+export function generatedImagePathFromActivity(
+  payload: unknown,
+  artifactId: string,
+): string | null {
+  const record = asRecord(payload);
+  const data = asRecord(record?.data);
+  const item = asRecord(data?.item);
+  const itemType = asTrimmedString(record?.itemType);
+  if (itemType !== "image_generation" && item?.type !== "imageGeneration") return null;
+  const callId =
+    asTrimmedString(record?.toolCallId) ??
+    asTrimmedString(data?.toolCallId) ??
+    asTrimmedString(item?.id);
+  if (callId !== artifactId) return null;
+  return asTrimmedString(item?.savedPath);
 }
 
 const optionOnNotFound = <A, R>(
@@ -187,6 +226,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
   readonly resource: AssetResource;
   readonly workspaceRoot?: string;
   readonly projectFaviconPath?: string;
+  readonly threadArtifactPath?: string;
 }) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -293,6 +333,34 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         expiresAt,
       };
       fileName = path.basename(attachmentPath);
+      break;
+    }
+    case "thread-artifact": {
+      const savedPath = asTrimmedString(input.threadArtifactPath);
+      if (!savedPath || !isWorkspaceImagePreviewPath(savedPath)) {
+        return yield* new AssetThreadArtifactNotFoundError({ resource: input.resource });
+      }
+      const canonicalFile = yield* resolveCanonicalFile(savedPath).pipe(
+        Effect.mapError(
+          (cause) =>
+            new AssetThreadArtifactInspectionError({
+              resource: input.resource,
+              cause,
+            }),
+        ),
+      );
+      if (!canonicalFile) {
+        return yield* new AssetThreadArtifactNotFoundError({ resource: input.resource });
+      }
+      claims = {
+        version: 1,
+        kind: "thread-artifact-file",
+        threadId: input.resource.threadId,
+        artifactId: input.resource.artifactId,
+        filePath: canonicalFile,
+        expiresAt,
+      };
+      fileName = path.basename(canonicalFile);
       break;
     }
     case "project-favicon": {
@@ -465,6 +533,24 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
     );
     return Option.isSome(info) && info.value.type === "File"
       ? ({ kind: "file", path: attachmentPath } satisfies ResolvedAsset)
+      : null;
+  }
+
+  if (claims.kind === "thread-artifact-file") {
+    const artifactPath = yield* resolveCanonicalFile(claims.filePath).pipe(
+      Effect.tapError((cause) =>
+        Effect.logError("Failed to resolve generated thread artifact.", {
+          threadId: claims.threadId,
+          artifactId: claims.artifactId,
+          cause,
+        }),
+      ),
+      Effect.orElseSucceed(() => null),
+    );
+    const path = yield* Path.Path;
+    return artifactPath === claims.filePath &&
+      decodeRelativePath(relativePath) === path.basename(claims.filePath)
+      ? ({ kind: "file", path: artifactPath } satisfies ResolvedAsset)
       : null;
   }
 

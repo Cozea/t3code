@@ -96,7 +96,7 @@ import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
-import { issueAssetUrl } from "./assets/AssetAccess.ts";
+import { generatedImagePathFromActivity, issueAssetUrl } from "./assets/AssetAccess.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
@@ -2019,6 +2019,38 @@ const makeWsRpcLayer = (
             Effect.gen(function* () {
               if (input.resource._tag === "attachment") {
                 return yield* issueAssetUrl({ resource: input.resource });
+              }
+              if (input.resource._tag === "thread-artifact") {
+                const thread = yield* projectionSnapshotQuery
+                  .getThreadDetailById(input.resource.threadId)
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new AssetWorkspaceContextResolutionError({
+                          resource: input.resource,
+                          cause,
+                        }),
+                    ),
+                  );
+                let threadArtifactPath: string | undefined;
+                if (Option.isSome(thread)) {
+                  for (let index = thread.value.activities.length - 1; index >= 0; index -= 1) {
+                    const activity = thread.value.activities[index]!;
+                    if (activity.kind !== "tool.completed") continue;
+                    const savedPath = generatedImagePathFromActivity(
+                      activity.payload,
+                      input.resource.artifactId,
+                    );
+                    if (savedPath) {
+                      threadArtifactPath = savedPath;
+                      break;
+                    }
+                  }
+                }
+                return yield* issueAssetUrl({
+                  resource: input.resource,
+                  ...(threadArtifactPath ? { threadArtifactPath } : {}),
+                });
               }
               if (input.resource._tag === "project-favicon") {
                 const project = yield* projectionSnapshotQuery

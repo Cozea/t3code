@@ -19,6 +19,7 @@ import {
   type OrchestrationCommand,
   ProjectId,
   ProviderItemId,
+  RuntimeItemId,
   type ServerSettings,
   ThreadId,
   TurnId,
@@ -62,6 +63,7 @@ function makeTestServerSettingsLayer(overrides: Partial<ServerSettings> = {}) {
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asItemId = (value: string): ProviderItemId => ProviderItemId.make(value);
+const asRuntimeItemId = (value: string): RuntimeItemId => RuntimeItemId.make(value);
 const asEventId = (value: string): EventId => EventId.make(value);
 const asMessageId = (value: string): MessageId => MessageId.make(value);
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
@@ -1028,6 +1030,63 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(message?.text).toBe("hello world");
     expect(message?.streaming).toBe(false);
+  });
+
+  it("coalesces provider reasoning into content-free lifecycle activities", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const reasoningDelta = (eventId: string, delta: string): ProviderRuntimeEvent => ({
+      type: "content.delta",
+      eventId: asEventId(eventId),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      itemId: asRuntimeItemId("reasoning-1"),
+      payload: {
+        streamKind: "reasoning_text",
+        delta,
+      },
+    });
+
+    harness.emit(reasoningDelta("evt-reasoning-1", "first private chunk"));
+    harness.emit(reasoningDelta("evt-reasoning-2", "second private chunk"));
+
+    let thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((activity) => activity.kind === "reasoning.started"),
+    );
+    expect(
+      thread.activities.filter((activity) => activity.kind === "reasoning.started"),
+    ).toHaveLength(1);
+    expect(JSON.stringify(thread.activities)).not.toContain("private chunk");
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-assistant-after-reasoning"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      itemId: asItemId("assistant-after-reasoning"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "public answer",
+      },
+    });
+
+    thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((activity) => activity.kind === "reasoning.completed"),
+    );
+    const reasoningKinds = thread.activities
+      .filter(
+        (activity) =>
+          activity.kind === "reasoning.started" || activity.kind === "reasoning.completed",
+      )
+      .map((activity) => activity.kind);
+    expect(reasoningKinds).toHaveLength(2);
+    expect(reasoningKinds).toEqual(
+      expect.arrayContaining(["reasoning.started", "reasoning.completed"]),
+    );
   });
 
   it("uses assistant item completion detail when no assistant deltas were streamed", async () => {

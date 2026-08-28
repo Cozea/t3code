@@ -1,4 +1,6 @@
 import {
+  DevServerAutomationInput,
+  DevServerAutomationStatus,
   PreviewAutomationClickInput,
   PreviewAutomationError,
   PreviewAutomationEvaluateInput,
@@ -54,6 +56,45 @@ export const PreviewStatusTool = Tool.make("preview_status", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
+
+export const DevServerStatusTool = Tool.make("dev_server_status", {
+  description:
+    "Inspect the current workspace/lane Dev Server singleton and its thread-bound Dev Server surface. This never targets an ordinary browser tile and does not start a process.",
+  parameters: PreviewAutomationTabTargetInput,
+  success: DevServerAutomationStatus,
+  failure: PreviewAutomationError,
+  dependencies,
+})
+  .annotate(Tool.Title, "Get Dev Server status")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true);
+
+export const DevServerEnsureTool = browserTool(
+  Tool.make("dev_server_ensure", {
+    description:
+      "Use this tool whenever the user asks to start, run, serve, or open the current project's local preview; do not launch the server through a shell or terminal. Idempotently ensures the workspace/lane Dev Server singleton is running, reusing a ready process or joining a launch already in progress. Omit command normally so Cozea can resolve a bounded launch candidate locally. Pass command only when the user explicitly supplied or confirmed it, using {port} where needed. If a server was already started outside this tool, use dev_server_attach and navigate to its known port instead. This never targets ordinary Browser or DevApp tiles.",
+    parameters: DevServerAutomationInput,
+    success: DevServerAutomationStatus,
+    failure: PreviewAutomationError,
+    dependencies,
+  })
+    .annotate(Tool.Title, "Ensure Dev Server")
+    .annotate(Tool.Idempotent, true),
+);
+
+export const DevServerAttachTool = safeBrowserTool(
+  Tool.make("dev_server_attach", {
+    description:
+      "Attach a thread-bound Dev Server view to the existing workspace/lane runtime without starting or restarting it. Reuses an unleased Dev Server surface or creates an inactive tab beside this agent.",
+    parameters: DevServerAutomationInput,
+    success: DevServerAutomationStatus,
+    failure: PreviewAutomationError,
+    dependencies,
+  })
+    .annotate(Tool.Title, "Attach Dev Server view")
+    .annotate(Tool.Idempotent, true),
+);
 
 export const PreviewOpenTool = browserTool(
   Tool.make("preview_open", {
@@ -205,6 +246,9 @@ export const PreviewRecordingStopTool = safeBrowserTool(
 );
 
 export const PreviewToolkit = Toolkit.make(
+  DevServerStatusTool,
+  DevServerEnsureTool,
+  DevServerAttachTool,
   PreviewStatusTool,
   PreviewOpenTool,
   PreviewNavigateTool,
@@ -222,6 +266,9 @@ export const PreviewToolkit = Toolkit.make(
 );
 
 export const PreviewStandardToolkit = Toolkit.make(
+  DevServerStatusTool,
+  DevServerEnsureTool,
+  DevServerAttachTool,
   PreviewStatusTool,
   PreviewOpenTool,
   PreviewNavigateTool,

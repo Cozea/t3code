@@ -116,6 +116,46 @@ type RuntimeIngestionInput =
       event: TurnStartRequestedDomainEvent;
     };
 
+type ReasoningLifecycleTransition = "started" | "completed";
+
+function reasoningLifecycleTransition(
+  event: ProviderRuntimeEvent,
+): ReasoningLifecycleTransition | undefined {
+  if (event.type === "content.delta") {
+    return event.payload.streamKind === "reasoning_text" ||
+      event.payload.streamKind === "reasoning_summary_text"
+      ? "started"
+      : "completed";
+  }
+  if (
+    event.type === "item.started" ||
+    event.type === "item.updated" ||
+    event.type === "item.completed"
+  ) {
+    if (event.payload.itemType === "reasoning") {
+      return event.type === "item.completed" ? "completed" : "started";
+    }
+    return "completed";
+  }
+  switch (event.type) {
+    case "turn.proposed.delta":
+    case "turn.proposed.completed":
+    case "turn.plan.updated":
+    case "task.started":
+    case "task.progress":
+    case "task.updated":
+    case "task.completed":
+    case "request.opened":
+    case "user-input.requested":
+    case "turn.completed":
+    case "turn.aborted":
+    case "session.exited":
+      return "completed";
+    default:
+      return undefined;
+  }
+}
+
 function toTurnId(value: TurnId | string | undefined): TurnId | undefined {
   return value === undefined ? undefined : TurnId.make(String(value));
 }
@@ -896,6 +936,7 @@ const make = Effect.gen(function* () {
   const providerService = yield* ProviderService;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const serverSettingsService = yield* ServerSettingsService;
+  const reasoningActiveTurnKeys = new Set<string>();
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
     crypto.randomUUIDv4.pipe(
       Effect.map((uuid) => CommandId.make(`provider:${event.eventId}:${tag}:${uuid}`)),
@@ -1569,6 +1610,53 @@ const make = Effect.gen(function* () {
         event.type === "turn.started" && shouldApplyThreadLifecycle
           ? yield* getSourceProposedPlanReferenceForAcceptedTurnStart(thread.id, eventTurnId)
           : null;
+
+      const reasoningTransition = reasoningLifecycleTransition(event);
+      const reasoningTurnId =
+        eventTurnId ??
+        (event.type === "session.exited" ||
+        event.type === "turn.completed" ||
+        event.type === "turn.aborted"
+          ? (activeTurnId ?? undefined)
+          : undefined);
+      if (!conflictsWithActiveTurn && reasoningTransition && reasoningTurnId) {
+        const reasoningKey = providerTurnKey(thread.id, reasoningTurnId);
+        const reasoningWasActive = reasoningActiveTurnKeys.has(reasoningKey);
+        const reasoningIsActive = reasoningTransition === "started";
+        if (reasoningWasActive !== reasoningIsActive) {
+          const activityKind = reasoningIsActive ? "reasoning.started" : "reasoning.completed";
+          yield* orchestrationEngine.dispatch({
+            type: "thread.activity.append",
+            commandId: yield* providerCommandId(event, activityKind),
+            threadId: thread.id,
+            activity: {
+              id: EventId.make(`${event.eventId}:${activityKind}`),
+              tone: "info",
+              kind: activityKind,
+              summary: reasoningIsActive ? "Reasoning started" : "Reasoning completed",
+              payload: {
+                provider: event.provider,
+                ...(event.type === "content.delta" ? { streamKind: event.payload.streamKind } : {}),
+              },
+              turnId: reasoningTurnId,
+              ...((event as ProviderRuntimeEvent & { sessionSequence?: number }).sessionSequence !==
+              undefined
+                ? {
+                    sequence: (event as ProviderRuntimeEvent & { sessionSequence: number })
+                      .sessionSequence,
+                  }
+                : {}),
+              createdAt: now,
+            },
+            createdAt: now,
+          });
+          if (reasoningIsActive) {
+            reasoningActiveTurnKeys.add(reasoningKey);
+          } else {
+            reasoningActiveTurnKeys.delete(reasoningKey);
+          }
+        }
+      }
 
       if (
         event.type === "session.started" ||
