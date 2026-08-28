@@ -66,14 +66,17 @@ it.layer(NodeServices.layer)("CliState", (it) => {
       yield* CliState.setCliDesiredCloudLink(true, "publish_only");
       assert.isTrue(yield* CliState.readCliDesiredCloudLink);
       assert.equal(yield* CliState.readCliDesiredLinkMode, "publish_only");
+      assert.equal(yield* CliState.readCliLinkIntent, "explicit");
 
-      yield* CliState.setCliDesiredCloudLink(true, "managed");
+      yield* CliState.setCliDesiredCloudLink(true, "managed", "resume");
       assert.equal(yield* CliState.readCliDesiredLinkMode, "managed");
+      assert.equal(yield* CliState.readCliLinkIntent, "resume");
 
       // A pre-existing link persisted the literal "true"; treat it as managed.
       yield* secrets.set(CliState.CLOUD_CLI_DESIRED_LINK_SECRET, new TextEncoder().encode("true"));
       assert.isTrue(yield* CliState.readCliDesiredCloudLink);
       assert.equal(yield* CliState.readCliDesiredLinkMode, "managed");
+      assert.equal(yield* CliState.readCliLinkIntent, "resume");
 
       yield* CliState.setCliDesiredCloudLink(false);
       assert.equal(yield* CliState.readCliDesiredLinkMode, "managed");

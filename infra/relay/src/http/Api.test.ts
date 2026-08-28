@@ -185,6 +185,7 @@ function relayUnlinkTestLayer(input?: {
         listPublicKeysForEnvironment: () => Effect.die("unused listPublicKeysForEnvironment"),
         listForUser: () => Effect.die("unused listForUser"),
         getForUser: input?.getForUser ?? (() => Effect.succeed(null)),
+        isRevokedForUser: () => Effect.die("unused isRevokedForUser"),
         revokeForUser: input?.revokeForUser ?? (() => Effect.succeed(false)),
       }),
     ),
@@ -273,7 +274,7 @@ describe("relay environment unlink", () => {
           userId: "user-1",
           environmentId: "environment-1",
         }),
-      ).toBe(true);
+      ).toEqual({ unlinked: true, cleanupPending: false });
       expect(calls).toEqual([
         "prepare",
         "lookup",
@@ -375,7 +376,7 @@ describe("relay environment unlink", () => {
           userId: "user-1",
           environmentId: "environment-1",
         }),
-      ).toBe(false);
+      ).toEqual({ unlinked: false, cleanupPending: false });
       expect(calls).toEqual(["prepare", "deprovision"]);
     }).pipe(
       Effect.provide(
@@ -389,6 +390,34 @@ describe("relay environment unlink", () => {
             Effect.sync(() => {
               calls.push("deprovision");
             }),
+        }),
+      ),
+    );
+  });
+
+  it.effect("reports cleanup pending after account revocation commits", () => {
+    const failure = new ManagedEndpointProvider.ManagedEndpointDeprovisioningFailed({
+      stage: "delete-tunnel",
+      userId: "user-1",
+      environmentId: "environment-1",
+      tunnelId: "tunnel-1",
+      cause: "active connector",
+    });
+    return Effect.gen(function* () {
+      expect(
+        yield* unlinkEnvironmentRecord({
+          userId: "user-1",
+          environmentId: "environment-1",
+        }),
+      ).toEqual({ unlinked: true, cleanupPending: true });
+    }).pipe(
+      Effect.provide(
+        relayUnlinkTestLayer({
+          getForUser: () => Effect.succeed(linkedEnvironmentRecord),
+          revokeForUser: () => Effect.succeed(true),
+          revokeCredential: () => Effect.succeed(true),
+          prepareDeprovision: () => Effect.succeed(null),
+          deprovision: () => Effect.fail(failure),
         }),
       ),
     );

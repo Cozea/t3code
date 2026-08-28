@@ -159,6 +159,8 @@ function relayProtectedErrorMessage(error: RelayProtectedErrorType): string {
       return "Relay timed out while contacting the environment endpoint.";
     case "RelayEnvironmentLinkFailedError":
       return `Relay could not link the environment (${error.reason}).`;
+    case "RelayEnvironmentLinkRevokedError":
+      return "This environment was removed from the T3 Connect account. Link it again to restore access.";
     case "RelayEnvironmentLinkUnavailableError":
       return `Relay cannot provision the managed endpoint (${error.reason}).`;
     case "RelayEnvironmentLinkLimitExceededError":
@@ -460,6 +462,7 @@ export function linkPrimaryEnvironmentToCloud(input: {
       .linkEnvironment({
         clerkToken: input.clerkToken,
         payload: {
+          intent: "explicit",
           proof,
           notificationsEnabled: true,
           liveActivitiesEnabled: true,

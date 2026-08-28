@@ -164,6 +164,43 @@ describe("createManagedRelayQueryManager", () => {
     }),
   );
 
+  it.effect("does not remove an environment when the account changes during token loading", () =>
+    Effect.gen(function* () {
+      let resolveToken!: (token: string) => void;
+      let markTokenRead!: () => void;
+      const tokenRead = new Promise<void>((resolve) => {
+        markTokenRead = resolve;
+      });
+      const unlinkEnvironment = vi.fn(() => Effect.succeed({ ok: true }));
+      setManagedRelaySession(registry, {
+        accountId: "account-1",
+        readClerkToken: () =>
+          new Promise<string>((resolve) => {
+            resolveToken = resolve;
+            markTokenRead();
+          }),
+      });
+
+      const removal = yield* deregisterManagedRelayEnvironment(registry, {
+        accountId: "account-1",
+        environmentId: environment.environmentId,
+      }).pipe(
+        Effect.provideService(ManagedRelay.ManagedRelayClient, createClient({ unlinkEnvironment })),
+        Effect.flip,
+        Effect.forkChild,
+      );
+      yield* Effect.promise(() => tokenRead);
+      setManagedRelaySession(registry, {
+        accountId: "account-2",
+        readClerkToken: () => Promise.resolve("second-token"),
+      });
+      resolveToken("first-token");
+
+      expect(yield* Fiber.join(removal)).toBeInstanceOf(ManagedRelaySessionError);
+      expect(unlinkEnvironment).not.toHaveBeenCalled();
+    }),
+  );
+
   it.effect("deduplicates concurrent Clerk token reads and reuses the token until JWT expiry", () =>
     Effect.gen(function* () {
       const token = clerkToken(4_102_444_800);

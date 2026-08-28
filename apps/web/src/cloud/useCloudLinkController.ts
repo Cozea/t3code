@@ -5,6 +5,7 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import { normalizeSecureRelayUrl } from "@t3tools/shared/relayUrl";
 import { useState } from "react";
 
 import { toastManager } from "../components/ui/toast";
@@ -16,7 +17,8 @@ import {
   updatePrimaryEnvironmentPreferences as updatePrimaryEnvironmentPreferencesAtom,
 } from "./linkEnvironmentAtoms";
 import { usePrimaryCloudLinkState } from "./primaryCloudLinkState";
-import { resolveRelayClerkTokenOptions } from "./publicConfig";
+import { resolveCloudPublicConfig, resolveRelayClerkTokenOptions } from "./publicConfig";
+import { useManagedRelayEnvironments } from "./managedRelayState";
 
 export interface CloudLinkDesiredState {
   readonly managedTunnel: boolean;
@@ -48,6 +50,7 @@ export function useCloudLinkController() {
     { reportFailure: false },
   );
   const primaryCloudLinkState = usePrimaryCloudLinkState();
+  const accountEnvironments = useManagedRelayEnvironments();
   const [operationError, setOperationError] = useState<string | null>(null);
 
   const reportUpdateFailure = (cause: unknown) => {
@@ -72,10 +75,37 @@ export function useCloudLinkController() {
 
   // Older environment servers predate the managedTunnelActive field; for them a
   // link always implies a managed tunnel, so fall back to `linked`.
-  const managedTunnelActive =
+  const locallyManagedTunnelActive =
     primaryCloudLinkState.data?.managedTunnelActive ?? primaryCloudLinkState.data?.linked ?? false;
-  const publishAgentActivity = primaryCloudLinkState.data?.publishAgentActivity ?? false;
-  const linked = primaryCloudLinkState.data?.linked ?? false;
+  const locallyPublishAgentActivity = primaryCloudLinkState.data?.publishAgentActivity ?? false;
+  const locallyLinked = primaryCloudLinkState.data?.linked ?? false;
+  const configuredRelayUrl = resolveCloudPublicConfig().relayUrl;
+  const linkedRelayUrl = normalizeSecureRelayUrl(primaryCloudLinkState.data?.relayUrl ?? "");
+  const accountMembershipKnown =
+    accountEnvironments.accountId !== null &&
+    accountEnvironments.data !== null &&
+    accountEnvironments.error === null &&
+    !accountEnvironments.isPending &&
+    configuredRelayUrl !== null &&
+    linkedRelayUrl === configuredRelayUrl &&
+    primaryCloudLinkState.data?.cloudUserId === accountEnvironments.accountId;
+  const accountHasPrimaryEnvironment =
+    primaryCloudLinkState.target !== null &&
+    accountEnvironments.data?.some(
+      (environment) =>
+        environment.environmentId === primaryCloudLinkState.target?.environmentId &&
+        !environment.cleanupPending,
+    );
+  const linked =
+    locallyLinked && (!accountMembershipKnown || accountHasPrimaryEnvironment === true);
+  const managedTunnelActive = linked && locallyManagedTunnelActive;
+  const publishAgentActivity = linked && locallyPublishAgentActivity;
+
+  const refreshCloudState = async () => {
+    primaryCloudLinkState.refresh();
+    accountEnvironments.refresh();
+    return await refreshRelayEnvironments();
+  };
 
   const reconcileCloudState = async (desired: CloudLinkDesiredState): Promise<boolean> => {
     setOperationError(null);
@@ -102,7 +132,7 @@ export function useCloudLinkController() {
         if (!isAtomCommandInterrupted(unlinkResult)) {
           reportUpdateFailure(squashAtomCommandFailure(unlinkResult));
         }
-        primaryCloudLinkState.refresh();
+        await refreshCloudState();
         return false;
       }
     } else {
@@ -125,7 +155,7 @@ export function useCloudLinkController() {
           if (!isAtomCommandInterrupted(linkResult)) {
             reportUpdateFailure(squashAtomCommandFailure(linkResult));
           }
-          primaryCloudLinkState.refresh();
+          await refreshCloudState();
           return false;
         }
       }
@@ -137,13 +167,12 @@ export function useCloudLinkController() {
         if (!isAtomCommandInterrupted(prefResult)) {
           reportUpdateFailure(squashAtomCommandFailure(prefResult));
         }
-        primaryCloudLinkState.refresh();
+        await refreshCloudState();
         return false;
       }
     }
 
-    primaryCloudLinkState.refresh();
-    const refreshResult = await refreshRelayEnvironments();
+    const refreshResult = await refreshCloudState();
     if (refreshResult._tag === "Failure" && !isAtomCommandInterrupted(refreshResult)) {
       reportUpdateFailure(squashAtomCommandFailure(refreshResult));
       return false;

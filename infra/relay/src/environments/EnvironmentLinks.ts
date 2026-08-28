@@ -9,10 +9,10 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { and, eq, isNull, or } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, or } from "drizzle-orm";
 
 import * as RelayDb from "../db.ts";
-import { relayEnvironmentLinks } from "../persistence/schema.ts";
+import { relayEnvironmentLinks, relayManagedEndpointAllocations } from "../persistence/schema.ts";
 
 export interface RelayLinkedEnvironmentRecord extends RelayClientEnvironmentRecord {
   readonly environmentPublicKey: string;
@@ -101,6 +101,18 @@ export class EnvironmentLinkRevokePersistenceError extends Schema.TaggedErrorCla
   }
 }
 
+export class EnvironmentLinkRevoked extends Schema.TaggedErrorClass<EnvironmentLinkRevoked>()(
+  "EnvironmentLinkRevoked",
+  {
+    userId: Schema.String,
+    environmentId: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Environment '${this.environmentId}' was removed from user '${this.userId}'`;
+  }
+}
+
 export class EnvironmentLinks extends Context.Service<
   EnvironmentLinks,
   {
@@ -109,7 +121,7 @@ export class EnvironmentLinks extends Context.Service<
       readonly request: RelayEnvironmentLinkRequest;
       readonly proof: RelayEnvironmentLinkProofPayload;
       readonly endpoint: RelayManagedEndpoint;
-    }) => Effect.Effect<void, EnvironmentLinkUpsertPersistenceError>;
+    }) => Effect.Effect<void, EnvironmentLinkUpsertPersistenceError | EnvironmentLinkRevoked>;
     readonly listUsersForEnvironment: (input: {
       readonly environmentId: string;
     }) => Effect.Effect<ReadonlyArray<string>, EnvironmentLinkUserListPersistenceError>;
@@ -125,6 +137,7 @@ export class EnvironmentLinks extends Context.Service<
     }) => Effect.Effect<ReadonlyArray<string>, EnvironmentPublicKeyListPersistenceError>;
     readonly listForUser: (input: {
       readonly userId: string;
+      readonly includeCleanupPending?: boolean;
     }) => Effect.Effect<
       ReadonlyArray<RelayClientEnvironmentRecord>,
       EnvironmentLinkListPersistenceError
@@ -133,6 +146,10 @@ export class EnvironmentLinks extends Context.Service<
       readonly userId: string;
       readonly environmentId: string;
     }) => Effect.Effect<RelayLinkedEnvironmentRecord | null, EnvironmentLinkLookupPersistenceError>;
+    readonly isRevokedForUser: (input: {
+      readonly userId: string;
+      readonly environmentId: string;
+    }) => Effect.Effect<boolean, EnvironmentLinkLookupPersistenceError>;
     readonly revokeForUser: (input: {
       readonly userId: string;
       readonly environmentId: string;
@@ -173,7 +190,7 @@ const make = Effect.gen(function* () {
       const { request, proof } = input;
       const environmentId = proof.environmentId;
       const { endpoint } = input;
-      yield* db
+      const rows = yield* db
         .insert(relayEnvironmentLinks)
         .values({
           userId: input.userId,
@@ -203,10 +220,14 @@ const make = Effect.gen(function* () {
             liveActivitiesEnabled: request.liveActivitiesEnabled,
             managedTunnelsEnabled: request.managedTunnelsEnabled,
             createdByDeviceId: request.deviceId ?? null,
-            revokedAt: null,
+            ...(request.intent === "explicit" ? { revokedAt: null, createdAt: now } : {}),
             updatedAt: now,
           },
+          ...(request.intent === "explicit"
+            ? {}
+            : { setWhere: isNull(relayEnvironmentLinks.revokedAt) }),
         })
+        .returning({ environmentId: relayEnvironmentLinks.environmentId })
         .pipe(
           Effect.mapError(
             (cause) =>
@@ -218,6 +239,12 @@ const make = Effect.gen(function* () {
               }),
           ),
         );
+      if (rows.length === 0) {
+        return yield* new EnvironmentLinkRevoked({
+          userId: input.userId,
+          environmentId,
+        });
+      }
     }),
 
     listUsersForEnvironment: Effect.fn("relay.environment_links.list_users_for_environment")(
@@ -308,12 +335,26 @@ const make = Effect.gen(function* () {
           endpointWsBaseUrl: relayEnvironmentLinks.endpointWsBaseUrl,
           endpointProviderKind: relayEnvironmentLinks.endpointProviderKind,
           createdAt: relayEnvironmentLinks.createdAt,
+          revokedAt: relayEnvironmentLinks.revokedAt,
+          allocationEnvironmentId: relayManagedEndpointAllocations.environmentId,
         })
         .from(relayEnvironmentLinks)
+        .leftJoin(
+          relayManagedEndpointAllocations,
+          and(
+            eq(relayManagedEndpointAllocations.userId, relayEnvironmentLinks.userId),
+            eq(relayManagedEndpointAllocations.environmentId, relayEnvironmentLinks.environmentId),
+          ),
+        )
         .where(
           and(
             eq(relayEnvironmentLinks.userId, input.userId),
-            isNull(relayEnvironmentLinks.revokedAt),
+            input.includeCleanupPending
+              ? or(
+                  isNull(relayEnvironmentLinks.revokedAt),
+                  isNotNull(relayManagedEndpointAllocations.environmentId),
+                )
+              : isNull(relayEnvironmentLinks.revokedAt),
           ),
         )
         .pipe(
@@ -329,6 +370,9 @@ const make = Effect.gen(function* () {
                   row.endpointProviderKind as RelayClientEnvironmentRecord["endpoint"]["providerKind"],
               },
               linkedAt: row.createdAt,
+              ...(row.revokedAt === null && row.allocationEnvironmentId === null
+                ? {}
+                : { cleanupPending: row.revokedAt !== null }),
             })),
           ),
           Effect.mapError(
@@ -394,6 +438,29 @@ const make = Effect.gen(function* () {
               }),
           ),
         );
+    }),
+
+    isRevokedForUser: Effect.fn("relay.environment_links.is_revoked_for_user")(function* (input) {
+      const rows = yield* db
+        .select({ revokedAt: relayEnvironmentLinks.revokedAt })
+        .from(relayEnvironmentLinks)
+        .where(
+          and(
+            eq(relayEnvironmentLinks.userId, input.userId),
+            eq(relayEnvironmentLinks.environmentId, input.environmentId),
+          ),
+        )
+        .limit(1)
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new EnvironmentLinkLookupPersistenceError({
+                ...input,
+                cause,
+              }),
+          ),
+        );
+      return rows[0]?.revokedAt != null;
     }),
 
     revokeForUser: Effect.fn("relay.environment_links.revoke_for_user")(function* (input) {

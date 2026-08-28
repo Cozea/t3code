@@ -13,6 +13,7 @@ import {
 } from "./config.ts";
 
 export const CLOUD_CLI_DESIRED_LINK_SECRET = "cloud-cli-desired-link";
+export const CLOUD_CLI_LINK_INTENT_SECRET = "cloud-cli-link-intent";
 
 // "managed" provisions a Cloudflare tunnel (default, legacy value "true").
 // "publish_only" links the environment to the relay purely to publish agent
@@ -23,6 +24,8 @@ export type CliDesiredLinkMode = "managed" | "publish_only";
 
 const MANAGED_BYTES = new TextEncoder().encode("managed");
 const PUBLISH_ONLY_BYTES = new TextEncoder().encode("publish_only");
+const EXPLICIT_BYTES = new TextEncoder().encode("explicit");
+const RESUME_BYTES = new TextEncoder().encode("resume");
 
 export const readCliDesiredCloudLink = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
@@ -41,9 +44,18 @@ export const readCliDesiredLinkMode = Effect.gen(function* () {
     : ("managed" as CliDesiredLinkMode);
 });
 
+export const readCliLinkIntent = Effect.gen(function* () {
+  const secrets = yield* ServerSecretStore.ServerSecretStore;
+  const value = yield* secrets.get(CLOUD_CLI_LINK_INTENT_SECRET);
+  return Option.isSome(value) && new TextDecoder().decode(value.value) === "explicit"
+    ? ("explicit" as const)
+    : ("resume" as const);
+});
+
 export const setCliDesiredCloudLink = Effect.fn("cloud.cli_state.set_desired")(function* (
   desired: boolean,
   mode: CliDesiredLinkMode = "managed",
+  intent: "explicit" | "resume" = "explicit",
 ) {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   if (desired) {
@@ -51,8 +63,15 @@ export const setCliDesiredCloudLink = Effect.fn("cloud.cli_state.set_desired")(f
       CLOUD_CLI_DESIRED_LINK_SECRET,
       mode === "publish_only" ? PUBLISH_ONLY_BYTES : MANAGED_BYTES,
     );
+    yield* secrets.set(
+      CLOUD_CLI_LINK_INTENT_SECRET,
+      intent === "explicit" ? EXPLICIT_BYTES : RESUME_BYTES,
+    );
   } else {
-    yield* secrets.remove(CLOUD_CLI_DESIRED_LINK_SECRET);
+    yield* Effect.all(
+      [secrets.remove(CLOUD_CLI_DESIRED_LINK_SECRET), secrets.remove(CLOUD_CLI_LINK_INTENT_SECRET)],
+      { concurrency: 2 },
+    );
   }
 });
 
@@ -61,6 +80,7 @@ export const clearPersistedCloudLink = Effect.gen(function* () {
   yield* Effect.all(
     [
       secrets.remove(CLOUD_CLI_DESIRED_LINK_SECRET),
+      secrets.remove(CLOUD_CLI_LINK_INTENT_SECRET),
       secrets.remove(CLOUD_LINKED_USER_ID),
       secrets.remove(RELAY_URL_SECRET),
       secrets.remove(RELAY_ISSUER_SECRET),

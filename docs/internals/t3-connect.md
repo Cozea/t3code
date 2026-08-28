@@ -125,6 +125,12 @@ connector, and attempts to revoke the relay-side environment record. It retains 
 authorization so `t3 connect link` can re-enable exposure without another browser flow. `t3 connect
 logout` performs the same cleanup and removes the stored CLI authorization.
 
+The CLI stores whether its next relay link is an explicit user request or a startup resume. The
+relay only lets an explicit request restore a revoked environment row. Startup resumes, including
+requests from older clients that omit the intent, cannot undo account removal. Explicit permission
+is consumed before the relay request because the relay can accept a request whose response is lost.
+After that point, another explicit `t3 connect link` is required to restore a revoked link.
+
 The background service has an independent lifecycle. Connect setup may offer to install it, but
 logout leaves it running; manage it with `t3 service status`, `install`, `update`, and `uninstall`.
 

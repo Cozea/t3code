@@ -226,6 +226,7 @@ function makeLinks(
         environmentPublicKey: environmentKeyPair.publicKey,
         ...overrides,
       }),
+    isRevokedForUser: () => Effect.succeed(false),
     revokeForUser: () => Effect.succeed(false),
   };
 }

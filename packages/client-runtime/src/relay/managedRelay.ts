@@ -13,6 +13,7 @@ import {
   type RelayEnvironmentLinkChallengeResponse,
   type RelayEnvironmentLinkRequest,
   type RelayEnvironmentLinkResponse,
+  type RelayEnvironmentUnlinkResponse,
   type RelayEnvironmentStatusResponse,
   RelayExchangeDpopAccessTokenEndpoint,
   RelayGetEnvironmentStatusEndpoint,
@@ -255,6 +256,7 @@ export class ManagedRelayClient extends Context.Service<
     readonly relayUrl: string;
     readonly listEnvironments: (input: {
       readonly clerkToken: string;
+      readonly includeCleanupPending?: boolean;
     }) => Effect.Effect<ReadonlyArray<RelayClientEnvironmentRecord>, ManagedRelayClientError>;
     readonly listDevices: (input: {
       readonly clerkToken: string;
@@ -270,7 +272,7 @@ export class ManagedRelayClient extends Context.Service<
     readonly unlinkEnvironment: (input: {
       readonly clerkToken: string;
       readonly environmentId: RelayClientEnvironmentRecord["environmentId"];
-    }) => Effect.Effect<RelayOkResponse, ManagedRelayClientError>;
+    }) => Effect.Effect<RelayEnvironmentUnlinkResponse, ManagedRelayClientError>;
     readonly getEnvironmentStatus: (input: {
       readonly clerkToken: string;
       readonly scopes: ReadonlyArray<RelayDpopAccessTokenScope>;
@@ -696,7 +698,10 @@ export const make = Effect.fn("ManagedRelayClient.make")(function* (
     listEnvironments: Effect.fnUntraced(
       function* (input) {
         return yield* client.client
-          .listEnvironments({ headers: bearerHeaders(input.clerkToken) })
+          .listEnvironments({
+            headers: bearerHeaders(input.clerkToken),
+            query: input.includeCleanupPending ? { includeCleanupPending: true } : {},
+          })
           .pipe(
             Effect.map((response) => response.environments),
             Effect.mapError(relayRequestError("list relay-managed environments")),

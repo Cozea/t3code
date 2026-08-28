@@ -86,6 +86,7 @@ function makeEnvironmentLinks(
     listPublicKeysForEnvironment: () => Effect.succeed([]),
     listForUser: () => Effect.succeed([]),
     getForUser: () => Effect.succeed(null),
+    isRevokedForUser: () => Effect.succeed(false),
     revokeForUser: () => Effect.succeed(false),
     ...overrides,
   };

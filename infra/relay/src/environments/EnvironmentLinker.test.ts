@@ -110,6 +110,8 @@ function testLayer(input?: {
   readonly upsert?: EnvironmentLinks.EnvironmentLinks["Service"]["upsert"];
   readonly consume?: DpopProofs.DpopProofReplay["Service"]["consume"];
   readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
+  readonly isRevokedForUser?: EnvironmentLinks.EnvironmentLinks["Service"]["isRevokedForUser"];
+  readonly provision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["provision"];
 }) {
   return EnvironmentLinker.layer.pipe(
     Layer.provideMerge(RelayTokens.layer),
@@ -128,6 +130,7 @@ function testLayer(input?: {
           listPublicKeysForEnvironment: () => Effect.succeed([]),
           listForUser: () => Effect.succeed([]),
           getForUser: () => Effect.succeed(null),
+          isRevokedForUser: input?.isRevokedForUser ?? (() => Effect.succeed(false)),
           revokeForUser: () => Effect.succeed(false),
         }),
         Layer.succeed(EnvironmentCredentials.EnvironmentCredentials, {
@@ -139,15 +142,17 @@ function testLayer(input?: {
           prepareDeprovision: () => Effect.succeed(null),
           deprovision: input?.deprovision ?? (() => Effect.void),
           release: () => Effect.succeed(true),
-          provision: () =>
-            Effect.succeed({
-              endpoint: {
-                httpBaseUrl: "https://managed.example.test/",
-                wsBaseUrl: "wss://managed.example.test/ws",
-                providerKind: "cloudflare_tunnel",
-              },
-              runtime: { providerKind: "cloudflare_tunnel", connectorToken: "connector-token" },
-            }),
+          provision:
+            input?.provision ??
+            (() =>
+              Effect.succeed({
+                endpoint: {
+                  httpBaseUrl: "https://managed.example.test/",
+                  wsBaseUrl: "wss://managed.example.test/ws",
+                  providerKind: "cloudflare_tunnel",
+                },
+                runtime: { providerKind: "cloudflare_tunnel", connectorToken: "connector-token" },
+              })),
         }),
       ),
     ),
@@ -155,6 +160,39 @@ function testLayer(input?: {
 }
 
 describe("EnvironmentLinker", () => {
+  it.effect("rejects an implicit resume of a revoked link before provisioning", () => {
+    let provisioned = false;
+    return Effect.gen(function* () {
+      const { request } = yield* makeRequest;
+      const linker = yield* EnvironmentLinker.EnvironmentLinker;
+      const error = yield* Effect.flip(linker.link({ userId: "user_123", request }));
+
+      expect(error).toBeInstanceOf(EnvironmentLinks.EnvironmentLinkRevoked);
+      expect(provisioned).toBe(false);
+    }).pipe(
+      Effect.provide(
+        testLayer({
+          isRevokedForUser: () => Effect.succeed(true),
+          provision: () =>
+            Effect.sync(() => {
+              provisioned = true;
+              return {
+                endpoint: {
+                  httpBaseUrl: "https://managed.example.test/",
+                  wsBaseUrl: "wss://managed.example.test/ws",
+                  providerKind: "cloudflare_tunnel" as const,
+                },
+                runtime: {
+                  providerKind: "cloudflare_tunnel" as const,
+                  connectorToken: "connector-token",
+                },
+              };
+            }),
+        }),
+      ),
+    );
+  });
+
   it.effect("uses verified JWT claims when linking an environment", () => {
     let persistedEnvironmentId: string | null = null;
     return Effect.gen(function* () {

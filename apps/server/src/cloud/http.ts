@@ -22,6 +22,7 @@ import {
   RelayEnvironmentConfigRequest,
   RelayEnvironmentLinkChallengeResponse,
   RelayEnvironmentLinkResponse,
+  RelayEnvironmentLinkRevokedError,
   RelayEnvironmentMintResponseProofPayload,
   type RelayEnvironmentMintResponse as RelayEnvironmentMintResponseShape,
   RelayEnvironmentLinkProof,
@@ -78,7 +79,9 @@ import {
 } from "./config.ts";
 import { relayUrlConfig } from "./publicConfig.ts";
 import {
+  clearPersistedCloudLink,
   readCliDesiredCloudLink,
+  readCliLinkIntent,
   readCliDesiredLinkMode,
   setCliDesiredCloudLink,
 } from "./CliState.ts";
@@ -97,6 +100,7 @@ const CLOUD_CREDENTIAL_RESPONSE_HEADERS = {
   "cache-control": "no-store",
   pragma: "no-cache",
 } as const;
+const isEnvironmentHttpConflictError = Schema.is(EnvironmentHttpConflictError);
 
 const appendCloudCredentialResponseHeaders = HttpEffect.appendPreResponseHandler(
   (_request, response) =>
@@ -520,24 +524,42 @@ const relayClientRequest = <A>(
     readonly token: string;
     readonly payload: unknown;
     readonly schema: Schema.Decoder<A>;
+    readonly recognizeRevokedLink?: boolean;
   },
 ) =>
   HttpClientRequest.post(input.url).pipe(
     HttpClientRequest.bearerToken(input.token),
     HttpClientRequest.bodyJson(input.payload),
     Effect.flatMap(dependencies.httpClient.execute),
+    Effect.flatMap((response) => {
+      if (response.status !== 409 || !input.recognizeRevokedLink) {
+        return Effect.succeed(response);
+      }
+      return HttpClientResponse.schemaBodyJson(RelayEnvironmentLinkRevokedError)(response).pipe(
+        Effect.flatMap(() =>
+          Effect.fail(
+            new EnvironmentHttpConflictError({
+              message: "This environment was removed from the T3 Connect account.",
+            }),
+          ),
+        ),
+      );
+    }),
     Effect.flatMap(HttpClientResponse.filterStatusOk),
     Effect.flatMap(HttpClientResponse.schemaBodyJson(input.schema)),
-    Effect.mapError(
-      (cause) =>
-        new EnvironmentHttpInternalServerError({
-          message: `T3 Connect relay request failed: ${String(cause)}`,
-        }),
+    Effect.mapError((cause) =>
+      isEnvironmentHttpConflictError(cause)
+        ? cause
+        : new EnvironmentHttpInternalServerError({
+            message: `T3 Connect relay request failed: ${String(cause)}`,
+          }),
     ),
     withRelayClientTracing,
   );
 
-const reconcileDesiredCloudLinkWith = Effect.fn("environment.cloud.reconcileDesiredLinkWith")(
+export const reconcileDesiredCloudLinkWith = Effect.fn(
+  "environment.cloud.reconcileDesiredLinkWith",
+)(
   function* (dependencies: CloudHttpDependencies, localOrigin: string) {
     const localUrl = yield* Effect.try({
       try: () => new URL(localOrigin),
@@ -566,6 +588,7 @@ const reconcileDesiredCloudLinkWith = Effect.fn("environment.cloud.reconcileDesi
       ),
     );
     const mode = yield* readCliDesiredLinkMode;
+    const linkIntent = yield* readCliLinkIntent;
     const managedTunnelsEnabled = mode !== "publish_only";
     const relayUrl = yield* requireRelayUrl;
     const challenge = yield* relayClientRequest(dependencies, {
@@ -595,18 +618,34 @@ const reconcileDesiredCloudLinkWith = Effect.fn("environment.cloud.reconcileDesi
       },
       localOrigin,
     );
+    // Explicit relink permission is single-use. A response can be lost after
+    // the relay accepts it, so later retries must resume instead of silently
+    // restoring a link removed in the meantime.
+    if (linkIntent === "explicit") {
+      yield* setCliDesiredCloudLink(true, mode, "resume");
+    }
     const link = yield* relayClientRequest(dependencies, {
       url: `${relayUrl}/v1/client/environment-links`,
       token: token.accessToken,
       payload: {
+        ...(linkIntent === "explicit" ? { intent: "explicit" as const } : {}),
         proof,
         notificationsEnabled: true,
         liveActivitiesEnabled: true,
         managedTunnelsEnabled,
       },
       schema: RelayEnvironmentLinkResponse,
-    });
-    yield* setCliDesiredCloudLink(true, mode);
+      recognizeRevokedLink: true,
+    }).pipe(
+      Effect.catchTag("EnvironmentHttpConflictError", (error) =>
+        Effect.gen(function* () {
+          yield* dependencies.endpointRuntime.applyConfig(null);
+          yield* clearPersistedCloudLink;
+          return yield* error;
+        }),
+      ),
+    );
+    yield* setCliDesiredCloudLink(true, mode, "resume");
     return yield* applyCloudRelayConfig(dependencies, {
       relayUrl,
       relayIssuer: link.relayIssuer,

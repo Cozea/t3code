@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -9,6 +10,7 @@ import * as PlatformError from "effect/PlatformError";
 import * as Tracer from "effect/Tracer";
 import {
   HttpClient,
+  HttpClientError,
   HttpClientResponse,
   HttpServerRequest,
   type HttpClientRequest,
@@ -27,7 +29,7 @@ import {
   type ServiceUpdateRecord,
 } from "./serviceProtocol.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import { CLOUD_CLI_DESIRED_LINK_SECRET } from "./CliState.ts";
+import { CLOUD_CLI_DESIRED_LINK_SECRET, CLOUD_CLI_LINK_INTENT_SECRET } from "./CliState.ts";
 import * as CliTokenManager from "./CliTokenManager.ts";
 import type { RelayLinkProofRequest } from "@t3tools/contracts/relay";
 import { CLOUD_ENDPOINT_RUNTIME_CONFIG, RELAY_URL_SECRET } from "./config.ts";
@@ -36,6 +38,7 @@ import {
   isSupportedLinkProviderKind,
   linkProofScopes,
   pendingServiceUpdateExists,
+  reconcileDesiredCloudLinkWith,
   reconcileDesiredCloudLink,
   releaseManagedTunnelOnShutdown,
 } from "./http.ts";
@@ -232,6 +235,206 @@ describe("reconcileDesiredCloudLink", () => {
       Effect.provide(NodeServices.layer),
     ),
   );
+
+  const cliToken: CliTokenManager.PersistedToken = {
+    accessToken: "cli-access-token",
+    refreshToken: "cli-refresh-token",
+    expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
+  };
+  const descriptor = {
+    environmentId: EnvironmentId.make("env_123"),
+    label: "Test environment",
+    platform: { os: "darwin" as const, arch: "arm64" as const },
+    serverVersion: "0.0.0-test",
+    capabilities: { repositoryIdentity: false },
+  };
+
+  function makeReconcileHarness(input: {
+    readonly linkResponse: (
+      request: HttpClientRequest.HttpClientRequest,
+    ) => Effect.Effect<HttpClientResponse.HttpClientResponse, HttpClientError.HttpClientError>;
+  }) {
+    const values = new Map<string, Uint8Array>([
+      [CLOUD_CLI_DESIRED_LINK_SECRET, new TextEncoder().encode("managed")],
+      [CLOUD_CLI_LINK_INTENT_SECRET, new TextEncoder().encode("explicit")],
+      [CLOUD_ENDPOINT_RUNTIME_CONFIG, new TextEncoder().encode("persisted-runtime-config")],
+    ]);
+    const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+    const linkIntentsAtRequest: Array<string | null> = [];
+    const linkPayloads: Array<Record<string, unknown>> = [];
+    const store: ServerSecretStore.ServerSecretStore["Service"] = {
+      get: (name) => Effect.sync(() => Option.fromNullishOr(values.get(name))),
+      set: (name, value) =>
+        Effect.sync(() => {
+          values.set(name, value);
+        }),
+      create: (name, value) =>
+        Effect.sync(() => {
+          values.set(name, value);
+        }),
+      getOrCreateRandom: unusedSecretStoreOperation,
+      remove: (name) =>
+        Effect.sync(() => {
+          values.delete(name);
+        }),
+    };
+    const applyConfigCalls: Array<unknown> = [];
+    const dependencies = {
+      secrets: store,
+      environment: ServerEnvironment.ServerEnvironment.of({
+        getEnvironmentId: Effect.succeed(descriptor.environmentId),
+        getDescriptor: Effect.succeed(descriptor),
+      }),
+      endpointRuntime: ManagedEndpointRuntime.CloudManagedEndpointRuntime.of({
+        applyConfig: (config) =>
+          Effect.sync(() => {
+            applyConfigCalls.push(config);
+            return { status: "disabled" as const };
+          }),
+      }),
+      environmentAuth: EnvironmentAuth.EnvironmentAuth.of(
+        {} as EnvironmentAuth.EnvironmentAuth["Service"],
+      ),
+      cliTokenManager: CliTokenManager.CloudCliTokenManager.of({
+        get: unusedSecretStoreOperation(),
+        getExisting: Effect.succeed(Option.some(cliToken)),
+        hasCredential: unusedSecretStoreOperation(),
+        store: () => unusedSecretStoreOperation(),
+        clear: unusedSecretStoreOperation(),
+      }),
+      httpClient: HttpClient.make((request) => {
+        requests.push(request);
+        if (request.url.endsWith("/v1/client/environment-link-challenges")) {
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              Response.json({
+                challenge: "test-challenge",
+                expiresAt: "2026-08-28T20:00:00.000Z",
+              }),
+            ),
+          );
+        }
+        const linkIntent = values.get(CLOUD_CLI_LINK_INTENT_SECRET);
+        linkIntentsAtRequest.push(linkIntent ? new TextDecoder().decode(linkIntent) : null);
+        if (request.body._tag === "Uint8Array") {
+          linkPayloads.push(
+            JSON.parse(new TextDecoder().decode(request.body.body)) as Record<string, unknown>,
+          );
+        }
+        return input.linkResponse(request);
+      }),
+    };
+    const testLayer = Layer.mergeAll(
+      Layer.succeed(ServerSecretStore.ServerSecretStore, store),
+      ConfigProvider.layer(
+        ConfigProvider.fromEnv({ env: { T3CODE_RELAY_URL: "https://relay.example.test" } }),
+      ),
+      NodeServices.layer,
+    );
+    const run = reconcileDesiredCloudLinkWith(dependencies, "http://127.0.0.1:3774").pipe(
+      Effect.provide(testLayer),
+    );
+    return { applyConfigCalls, linkIntentsAtRequest, linkPayloads, requests, run, values };
+  }
+
+  it.effect("clears local link state only for the structured revoked-link conflict", () => {
+    const harness = makeReconcileHarness({
+      linkResponse: (request) =>
+        Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            Response.json(
+              {
+                _tag: "RelayEnvironmentLinkRevokedError",
+                code: "environment_link_revoked",
+                traceId: "trace-revoked",
+              },
+              { status: 409 },
+            ),
+          ),
+        ),
+    });
+
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(harness.run);
+
+      expect(error).toMatchObject({
+        _tag: "EnvironmentHttpConflictError",
+        message: "This environment was removed from the T3 Connect account.",
+      });
+      expect(harness.applyConfigCalls).toEqual([null]);
+      expect(harness.values.has(CLOUD_CLI_DESIRED_LINK_SECRET)).toBe(false);
+      expect(harness.values.has(CLOUD_CLI_LINK_INTENT_SECRET)).toBe(false);
+      expect(harness.values.has(CLOUD_ENDPOINT_RUNTIME_CONFIG)).toBe(false);
+    });
+  });
+
+  it.effect("preserves local link state for an unrelated 409 response", () => {
+    const harness = makeReconcileHarness({
+      linkResponse: (request) =>
+        Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            Response.json({ code: "other_conflict" }, { status: 409 }),
+          ),
+        ),
+    });
+
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(harness.run);
+
+      expect(error).toMatchObject({ _tag: "EnvironmentHttpInternalServerError" });
+      expect(harness.applyConfigCalls).toEqual([]);
+      expect(harness.values.has(CLOUD_CLI_DESIRED_LINK_SECRET)).toBe(true);
+      expect(harness.values.has(CLOUD_ENDPOINT_RUNTIME_CONFIG)).toBe(true);
+    });
+  });
+
+  it.effect("preserves local link state after a relay transport failure", () => {
+    const harness = makeReconcileHarness({
+      linkResponse: (request) =>
+        Effect.fail(
+          new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({
+              request,
+              cause: new Error("connection closed"),
+            }),
+          }),
+        ),
+    });
+
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(harness.run);
+
+      expect(error).toMatchObject({ _tag: "EnvironmentHttpInternalServerError" });
+      expect(harness.applyConfigCalls).toEqual([]);
+      expect(harness.values.has(CLOUD_CLI_DESIRED_LINK_SECRET)).toBe(true);
+      expect(harness.values.has(CLOUD_ENDPOINT_RUNTIME_CONFIG)).toBe(true);
+    });
+  });
+
+  it.effect("consumes explicit link intent before sending the relay mutation", () => {
+    const harness = makeReconcileHarness({
+      linkResponse: (request) =>
+        Effect.fail(
+          new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({ request }),
+          }),
+        ),
+    });
+
+    return Effect.gen(function* () {
+      yield* Effect.flip(harness.run);
+
+      expect(harness.linkIntentsAtRequest).toEqual(["resume"]);
+      expect(harness.linkPayloads).toHaveLength(1);
+      expect(harness.linkPayloads[0]?.intent).toBe("explicit");
+      expect(new TextDecoder().decode(harness.values.get(CLOUD_CLI_LINK_INTENT_SECRET))).toBe(
+        "resume",
+      );
+    });
+  });
 });
 
 describe("releaseManagedTunnelOnShutdown", () => {

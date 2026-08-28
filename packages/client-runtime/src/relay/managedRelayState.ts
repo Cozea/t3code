@@ -233,8 +233,13 @@ export const deregisterManagedRelayEnvironment = Effect.fn(
     });
   }
   const clerkToken = yield* readSessionClerkToken(session);
+  if (registry.get(managedRelaySessionAtom) !== session) {
+    return yield* new ManagedRelaySessionError({
+      message: "The T3 Connect account changed before the environment could be removed.",
+    });
+  }
   const relay = yield* ManagedRelay.ManagedRelayClient;
-  yield* relay.unlinkEnvironment({ clerkToken, environmentId: input.environmentId });
+  return yield* relay.unlinkEnvironment({ clerkToken, environmentId: input.environmentId });
 });
 
 function requireClerkToken(
@@ -373,7 +378,7 @@ export function createManagedRelayQueryManager(
           const relay = yield* ManagedRelay.ManagedRelayClient;
           return yield* observe(
             { ...base, stage: "relay-request" },
-            relay.listEnvironments({ clerkToken }),
+            relay.listEnvironments({ clerkToken, includeCleanupPending: true }),
           );
         }),
       )

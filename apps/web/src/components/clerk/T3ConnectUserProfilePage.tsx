@@ -1,22 +1,10 @@
-import { findErrorTraceId } from "@t3tools/client-runtime/errors";
-import {
-  isAtomCommandInterrupted,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId } from "@t3tools/contracts";
 import type { RelayClientEnvironmentRecord } from "@t3tools/contracts/relay";
 import { ServerIcon } from "lucide-react";
-import { useRef, useState } from "react";
 
-import {
-  deregisterManagedRelayEnvironmentCommand,
-  useManagedRelayEnvironments,
-} from "../../cloud/managedRelayState";
-import { useAtomCommand } from "../../state/use-atom-command";
+import { useManagedRelayEnvironmentRemoval } from "../../cloud/useManagedRelayEnvironmentRemoval";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
-import { toastManager } from "../ui/toast";
 import {
   ClerkUserProfilePage,
   ClerkUserProfileRefreshButton,
@@ -55,7 +43,9 @@ export function T3ConnectEnvironmentRow(props: {
               {environment.label}
             </h3>
             <p className="mt-1 text-xs leading-[1.125rem] text-muted-foreground">
-              {linkedAtLabel(environment.linkedAt)} · {endpointLabel(environment)}
+              {environment.cleanupPending
+                ? "Removed from account - cleanup pending"
+                : `${linkedAtLabel(environment.linkedAt)} - ${endpointLabel(environment)}`}
             </p>
           </div>
           <CollapsibleTrigger
@@ -66,7 +56,7 @@ export function T3ConnectEnvironmentRow(props: {
                 className="text-[0.8125rem]"
                 disabled={props.mutationPending}
               >
-                Deregister
+                {environment.cleanupPending ? "Retry cleanup" : "Remove"}
               </Button>
             }
           />
@@ -77,17 +67,21 @@ export function T3ConnectEnvironmentRow(props: {
             <div
               className="rounded-lg border border-input bg-muted/32 px-5 py-4 shadow-xs/5"
               role="group"
-              aria-label={`Confirm deregistration of ${environment.label}`}
+              aria-label={`Confirm removal of ${environment.label}`}
             >
               <h4 className="text-[0.8125rem] leading-[1.125rem] font-semibold text-foreground">
-                Deregister server
+                {environment.cleanupPending ? "Retry cleanup" : "Remove from T3 Connect"}
               </h4>
               <p className="mt-1 text-[0.8125rem] leading-[1.125rem] text-muted-foreground">
-                “{environment.label}” will be removed from this account.
+                "{environment.label}"{" "}
+                {environment.cleanupPending
+                  ? "is already removed."
+                  : "will be removed from this account."}
               </p>
               <p className="mt-4 max-w-xl text-[0.8125rem] leading-[1.125rem] text-muted-foreground">
-                T3 Connect access will be revoked, any managed tunnel will be removed, and a host
-                space will become available. Local connections on your devices are not changed.
+                {environment.cleanupPending
+                  ? "Stop the running host, then retry cleanup. Local connections are not changed."
+                  : "T3 Connect account access and activity publishing will stop. Tunnel cleanup can require the running host to stop. Local connections are not changed."}
               </p>
               <div className="mt-4 flex justify-end gap-2">
                 <Button
@@ -106,7 +100,11 @@ export function T3ConnectEnvironmentRow(props: {
                   disabled={props.mutationPending}
                   onClick={() => props.onDeregister(environment)}
                 >
-                  {props.mutationPending ? "Deregistering…" : "Deregister"}
+                  {props.mutationPending
+                    ? "Working..."
+                    : environment.cleanupPending
+                      ? "Retry cleanup"
+                      : "Remove"}
                 </Button>
               </div>
             </div>
@@ -118,83 +116,10 @@ export function T3ConnectEnvironmentRow(props: {
 }
 
 export function T3ConnectUserProfilePage() {
-  const environmentsState = useManagedRelayEnvironments();
-  const deregisterEnvironment = useAtomCommand(deregisterManagedRelayEnvironmentCommand, {
-    reportFailure: false,
-  });
-  const [deregisteringEnvironmentId, setDeregisteringEnvironmentId] =
-    useState<EnvironmentId | null>(null);
-  const [confirmingEnvironmentId, setConfirmingEnvironmentId] = useState<EnvironmentId | null>(
-    null,
-  );
-  const mutationPendingRef = useRef(false);
-  const [removedEnvironments, setRemovedEnvironments] = useState<{
-    readonly accountId: string | null;
-    readonly linkedAtById: ReadonlyMap<EnvironmentId, string>;
-  }>({ accountId: null, linkedAtById: new Map() });
+  const removal = useManagedRelayEnvironmentRemoval();
+  const { environmentsState } = removal;
 
-  const handleDeregister = async (environment: RelayClientEnvironmentRecord) => {
-    const accountId = environmentsState.accountId;
-    if (!accountId || mutationPendingRef.current) return;
-
-    mutationPendingRef.current = true;
-    setDeregisteringEnvironmentId(environment.environmentId);
-    const result = await deregisterEnvironment({
-      accountId,
-      environmentId: environment.environmentId,
-    });
-    mutationPendingRef.current = false;
-    setDeregisteringEnvironmentId(null);
-
-    if (result._tag === "Success") {
-      setConfirmingEnvironmentId(null);
-      setRemovedEnvironments((current) => {
-        const linkedAtById = new Map(current.accountId === accountId ? current.linkedAtById : []);
-        linkedAtById.set(environment.environmentId, environment.linkedAt);
-        return { accountId, linkedAtById };
-      });
-      environmentsState.refresh();
-      toastManager.add({
-        type: "success",
-        title: "Server deregistered",
-        description: "T3 Connect access was revoked and a host space is now available.",
-      });
-      return;
-    }
-    if (isAtomCommandInterrupted(result)) return;
-
-    const cause = squashAtomCommandFailure(result);
-    const message = cause instanceof Error ? cause.message : "Could not deregister the server.";
-    const traceId = findErrorTraceId(cause);
-    console.error("[t3-connect] Could not deregister environment", {
-      environmentId: environment.environmentId,
-      message,
-      traceId,
-      cause,
-    });
-    toastManager.add({
-      type: "error",
-      title: "Could not deregister server",
-      description: message,
-      data: traceId
-        ? {
-            secondaryActionProps: {
-              children: "Copy trace ID",
-              onClick: () => void navigator.clipboard?.writeText(traceId),
-            },
-          }
-        : undefined,
-    });
-  };
-
-  const removedEnvironmentLinkedAt =
-    removedEnvironments.accountId === environmentsState.accountId
-      ? removedEnvironments.linkedAtById
-      : new Map<EnvironmentId, string>();
-  const environments = (environmentsState.data ?? []).filter(
-    (environment) =>
-      removedEnvironmentLinkedAt.get(environment.environmentId) !== environment.linkedAt,
-  );
+  const environments = environmentsState.data ?? [];
   const isInitialLoad =
     !environmentsState.accountId || (environmentsState.data === null && !environmentsState.error);
 
@@ -204,7 +129,7 @@ export function T3ConnectUserProfilePage() {
       description="Environments registered to your account. Connections on this device are managed in Settings."
       action={
         <ClerkUserProfileRefreshButton
-          disabled={deregisteringEnvironmentId !== null}
+          disabled={removal.pendingEnvironmentId !== null}
           isPending={environmentsState.isPending}
           onClick={environmentsState.refresh}
         />
@@ -230,12 +155,13 @@ export function T3ConnectUserProfilePage() {
               <T3ConnectEnvironmentRow
                 key={environment.environmentId}
                 environment={environment}
-                confirmationOpen={confirmingEnvironmentId === environment.environmentId}
-                mutationPending={deregisteringEnvironmentId !== null}
+                confirmationOpen={removal.confirmingEnvironmentId === environment.environmentId}
+                mutationPending={removal.pendingEnvironmentId !== null}
                 onConfirmationChange={(open) =>
-                  setConfirmingEnvironmentId(open ? environment.environmentId : null)
+                  removal.pendingEnvironmentId === null &&
+                  removal.setConfirmingEnvironmentId(open ? environment.environmentId : null)
                 }
-                onDeregister={(selected) => void handleDeregister(selected)}
+                onDeregister={(selected) => void removal.removeEnvironment(selected)}
               />
             ))}
           </ul>

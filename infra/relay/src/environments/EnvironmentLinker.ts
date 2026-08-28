@@ -67,6 +67,8 @@ export type EnvironmentLinkError =
   | EnvironmentLinkProofInvalid
   | DpopProofs.DpopProofReplayPersistenceError
   | EnvironmentLinks.EnvironmentLinkUpsertPersistenceError
+  | EnvironmentLinks.EnvironmentLinkLookupPersistenceError
+  | EnvironmentLinks.EnvironmentLinkRevoked
   | EnvironmentCredentials.EnvironmentCredentialCreatePersistenceError
   | ManagedEndpointProvider.ManagedEndpointProviderError;
 
@@ -285,6 +287,18 @@ const make = Effect.gen(function* () {
           environmentId: verified.environmentId,
           reason: "origin_not_allowed",
           stage: "validate_origin",
+        });
+      }
+      if (
+        input.request.intent !== "explicit" &&
+        (yield* links.isRevokedForUser({
+          userId: input.userId,
+          environmentId: verified.environmentId,
+        }))
+      ) {
+        return yield* new EnvironmentLinks.EnvironmentLinkRevoked({
+          userId: input.userId,
+          environmentId: verified.environmentId,
         });
       }
       // Downgrading a managed link to publish-only must release the tunnel and
