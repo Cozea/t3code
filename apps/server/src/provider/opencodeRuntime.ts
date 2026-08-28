@@ -741,6 +741,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
   const loadAgents = (client: OpencodeClient) =>
     runOpenCodeSdk("app.agents", () => client.app.agents()).pipe(
       Effect.map((result) => result.data ?? []),
+      Effect.orElseSucceed((): ReadonlyArray<Agent> => []),
     );
 
   const loadSkills = (client: OpencodeClient) =>

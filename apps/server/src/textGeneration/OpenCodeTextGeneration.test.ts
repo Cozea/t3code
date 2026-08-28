@@ -163,6 +163,10 @@ const OpenCodeTextGenerationExistingServerTestLayer = Layer.succeed(
 const DEFAULT_OPENCODE_SETTINGS = Schema.decodeSync(OpenCodeSettings)({
   binaryPath: "fake-opencode",
 });
+const LOCAL_AUTH_OPENCODE_SETTINGS = Schema.decodeSync(OpenCodeSettings)({
+  binaryPath: "fake-opencode",
+  serverPassword: "secret-password",
+});
 const EXISTING_SERVER_OPENCODE_SETTINGS = Schema.decodeSync(OpenCodeSettings)({
   binaryPath: "fake-opencode",
   serverUrl: "http://127.0.0.1:9999",
@@ -224,6 +228,19 @@ it.layer(OpenCodeTextGenerationTestLayer)("OpenCodeTextGeneration", (it) => {
         expect(runtimeMock.state.promptParts[0]).toEqual([
           expect.objectContaining({ type: "text" }),
           expect.objectContaining({ type: "file", filename: "screenshot.png" }),
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("passes configured authentication to a locally spawned server", () =>
+    withOpenCodeTextGeneration(LOCAL_AUTH_OPENCODE_SETTINGS, (textGeneration) =>
+      Effect.gen(function* () {
+        yield* textGeneration.generateCommitMessage(DEFAULT_COMMIT_MESSAGE_INPUT);
+
+        expect(runtimeMock.state.startCalls).toEqual(["fake-opencode"]);
+        expect(runtimeMock.state.authHeaders).toEqual([
+          `Basic ${btoa("opencode:secret-password")}`,
         ]);
       }),
     ),
