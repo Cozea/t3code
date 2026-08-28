@@ -1,4 +1,5 @@
-import { EnvironmentId } from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -769,6 +770,90 @@ describe("attachmentUploadQueue", () => {
       environmentId: firstEnvironment,
       attachmentId: "pending-environment-1-image-move.png",
     });
+  });
+
+  it("releases a moved file's source upload only after its destination upload succeeds", async () => {
+    const source = scopeThreadRef(firstEnvironment, ThreadId.make("thread-file-move-source"));
+    const destination = scopeThreadRef(
+      secondEnvironment,
+      ThreadId.make("thread-file-move-destination"),
+    );
+    const file = makeFile("moved-report");
+    const store = useComposerDraftStore.getState();
+    store.addFiles(source, [file]);
+
+    try {
+      startAttachmentUpload({
+        environmentId: firstEnvironment,
+        image: file,
+        draftTarget: source,
+      });
+      await Promise.resolve();
+      let settled = awaitAttachmentUploads([file.id]);
+      TestXmlHttpRequest.requests[0]!.complete();
+      await settled;
+
+      const sourceAttachmentId = store.getComposerDraft(source)?.files[0]?.uploadedAttachmentId;
+      expect(sourceAttachmentId).toBe("pending-environment-1-moved-report.pdf");
+
+      store.moveComposerPromptAndImages(source, destination);
+      const movedFile = store.getComposerDraft(destination)?.files[0];
+      expect(movedFile).toMatchObject({
+        id: file.id,
+        file: file.file,
+      });
+      expect(movedFile?.uploadedAttachmentId).toBeUndefined();
+      expect(movedFile?.uploadEnvironmentId).toBeUndefined();
+
+      startAttachmentUpload({
+        environmentId: secondEnvironment,
+        image: movedFile!,
+        draftTarget: destination,
+      });
+      await Promise.resolve();
+
+      const sourceDeletesBeforeDestinationUpload = mocks.runAtomCommand.mock.calls.filter(
+        ([, command, target]) =>
+          command === mocks.removeUpload &&
+          (
+            target as {
+              readonly environmentId: EnvironmentId;
+              readonly input: { readonly attachmentId: string };
+            }
+          ).environmentId === firstEnvironment &&
+          (target as { readonly input: { readonly attachmentId: string } }).input.attachmentId ===
+            sourceAttachmentId,
+      );
+      expect(sourceDeletesBeforeDestinationUpload).toEqual([]);
+
+      settled = awaitAttachmentUploads([file.id]);
+      TestXmlHttpRequest.requests[1]!.complete();
+      await settled;
+
+      const sourceDeletesAfterDestinationUpload = mocks.runAtomCommand.mock.calls.filter(
+        ([, command, target]) =>
+          command === mocks.removeUpload &&
+          (
+            target as {
+              readonly environmentId: EnvironmentId;
+              readonly input: { readonly attachmentId: string };
+            }
+          ).environmentId === firstEnvironment &&
+          (target as { readonly input: { readonly attachmentId: string } }).input.attachmentId ===
+            sourceAttachmentId,
+      );
+      expect(sourceDeletesAfterDestinationUpload).toHaveLength(1);
+      expect(store.getComposerDraft(destination)?.files).toMatchObject([
+        {
+          id: file.id,
+          uploadedAttachmentId: "pending-environment-2-moved-report.pdf",
+          uploadEnvironmentId: secondEnvironment,
+        },
+      ]);
+    } finally {
+      store.clearComposerContent(source);
+      store.clearComposerContent(destination);
+    }
   });
 
   it("does not let stalled uploads block another environment", async () => {

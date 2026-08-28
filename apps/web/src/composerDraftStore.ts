@@ -3809,7 +3809,9 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 // the destination. Keeping the source-environment upload id
                 // would mark it uploaded after a reload with no local bytes
                 // and no valid upload anywhere the destination can reach. The
-                // orphaned source upload expires via the server sweep.
+                // upload queue keeps the source upload as fallback, then
+                // deletes it after the destination upload succeeds. Abandoned
+                // uploads still expire through the server sweep.
                 if (
                   file.file === null ||
                   file.uploadEnvironmentId === undefined ||
