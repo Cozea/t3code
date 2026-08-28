@@ -2,6 +2,7 @@ import { EnvironmentId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  composerFileNeedsReattach,
   DraftId,
   useComposerDraftStore,
   type ComposerFileAttachment,
@@ -257,6 +258,43 @@ describe("attachmentUploadQueue", () => {
     ]);
   });
 
+  it("uses the fallback MIME type for both the upload claim and request header", async () => {
+    const bytes = new File([new Uint8Array([1, 2, 3])], "unknown.bin");
+    const file: ComposerFileAttachment = {
+      type: "file",
+      id: "file-without-browser-mime",
+      name: bytes.name,
+      mimeType: "application/octet-stream",
+      sizeBytes: bytes.size,
+      file: bytes,
+    };
+
+    startAttachmentUpload({ environmentId: firstEnvironment, image: file });
+    await Promise.resolve();
+
+    expect(mocks.runAtomCommand).toHaveBeenCalledWith(
+      expect.anything(),
+      mocks.createUploadUrl,
+      {
+        environmentId: firstEnvironment,
+        input: {
+          type: "file",
+          name: "unknown.bin",
+          mimeType: "application/octet-stream",
+          sizeBytes: 3,
+        },
+      },
+      expect.anything(),
+    );
+    expect(TestXmlHttpRequest.requests[0]?.headers.get("Content-Type")).toBe(
+      "application/octet-stream",
+    );
+
+    const settled = awaitAttachmentUploads([file.id]);
+    TestXmlHttpRequest.requests[0]!.complete();
+    await settled;
+  });
+
   it("persists a background completion's ids to the draft with no composer mounted", async () => {
     const draftId = DraftId.make("draft-background-upload");
     const file = makeFile("background");
@@ -310,7 +348,8 @@ describe("attachmentUploadQueue", () => {
     expect(TestXmlHttpRequest.requests).toHaveLength(0);
   });
 
-  it("marks an expired restored file as failed when its original bytes are unavailable", async () => {
+  it("turns an expired persisted file into a marker that a re-pick can replace", async () => {
+    const draftId = DraftId.make("draft-expired-upload");
     const file: ComposerFileAttachment = {
       ...makeFile("expired"),
       file: null,
@@ -321,15 +360,62 @@ describe("attachmentUploadQueue", () => {
       _tag: "Failure",
       error: { _tag: "AssetAttachmentNotFoundError" },
     });
+    useComposerDraftStore.getState().addFiles(draftId, [file]);
 
-    startAttachmentUpload({ environmentId: firstEnvironment, image: file });
-    await awaitAttachmentUploads([file.id]);
+    try {
+      startAttachmentUpload({
+        environmentId: firstEnvironment,
+        image: file,
+        draftTarget: draftId,
+      });
+      await awaitAttachmentUploads([file.id]);
 
-    expect(readAttachmentUpload(file.id)).toMatchObject({
-      status: "failed",
-      reason: "Uploaded file expired. Remove it and attach it again.",
-    });
-    expect(TestXmlHttpRequest.requests).toHaveLength(0);
+      const marker = useComposerDraftStore.getState().getComposerDraft(draftId)?.files[0];
+      expect(readAttachmentUpload(file.id)).toBeUndefined();
+      expect(marker?.uploadedAttachmentId).toBeUndefined();
+      expect(marker?.uploadEnvironmentId).toBeUndefined();
+      expect(marker && composerFileNeedsReattach(marker)).toBe(true);
+
+      const replacementBytes = new File([new Uint8Array([1, 2, 3])], file.name, {
+        type: file.mimeType,
+      });
+      const replacement: ComposerFileAttachment = {
+        type: "file",
+        id: "expired-repicked",
+        name: file.name,
+        mimeType: file.mimeType,
+        sizeBytes: file.sizeBytes,
+        file: replacementBytes,
+      };
+      useComposerDraftStore.getState().addFiles(draftId, [replacement]);
+      expect(useComposerDraftStore.getState().getComposerDraft(draftId)?.files).toMatchObject([
+        { id: replacement.id, file: replacementBytes },
+      ]);
+
+      startAttachmentUpload({
+        environmentId: firstEnvironment,
+        image: replacement,
+        draftTarget: draftId,
+      });
+      await Promise.resolve();
+      const settled = awaitAttachmentUploads([replacement.id]);
+      TestXmlHttpRequest.requests[0]!.complete();
+      await settled;
+
+      expect(useComposerDraftStore.getState().getComposerDraft(draftId)?.files).toMatchObject([
+        {
+          id: replacement.id,
+          uploadedAttachmentId: "pending-environment-1-expired.pdf",
+          uploadEnvironmentId: firstEnvironment,
+        },
+      ]);
+      const removeCalls = mocks.runAtomCommand.mock.calls.filter(
+        ([, command]) => command === mocks.removeUpload,
+      );
+      expect(removeCalls).toEqual([]);
+    } finally {
+      useComposerDraftStore.getState().clearComposerContent(draftId);
+    }
   });
 
   it("uploads the original file again when its persisted server upload expired", async () => {
@@ -393,6 +479,7 @@ describe("attachmentUploadQueue", () => {
   });
 
   it("keeps the persisted upload when retrying after a transient verification failure", async () => {
+    const draftId = DraftId.make("draft-transient-verification");
     const file: ComposerFileAttachment = {
       ...makeFile("flaky"),
       file: null,
@@ -403,28 +490,53 @@ describe("attachmentUploadQueue", () => {
       _tag: "Failure",
       error: new Error("socket closed"),
     });
+    useComposerDraftStore.getState().addFiles(draftId, [file]);
 
-    startAttachmentUpload({ environmentId: firstEnvironment, image: file });
-    await awaitAttachmentUploads([file.id]);
-    expect(readAttachmentUpload(file.id)).toMatchObject({
-      status: "failed",
-      reason: "Uploaded file could not be verified. Retry when the server reconnects.",
-    });
+    try {
+      startAttachmentUpload({
+        environmentId: firstEnvironment,
+        image: file,
+        draftTarget: draftId,
+      });
+      await awaitAttachmentUploads([file.id]);
+      expect(readAttachmentUpload(file.id)).toMatchObject({
+        status: "failed",
+        reason: "Uploaded file could not be verified. Retry when the server reconnects.",
+      });
+      expect(useComposerDraftStore.getState().getComposerDraft(draftId)?.files).toMatchObject([
+        {
+          uploadedAttachmentId: "pending-flaky-pdf",
+          uploadEnvironmentId: firstEnvironment,
+        },
+      ]);
 
-    // The persisted id is the only server copy of the bytes (`file` is null
-    // after a reload), so the retry must verify it again, not delete it.
-    retryAttachmentUpload({ environmentId: firstEnvironment, image: file });
-    await awaitAttachmentUploads([file.id]);
+      // The persisted id is the only server copy of the bytes (`file` is null
+      // after a reload), so the retry must verify it again, not delete it.
+      retryAttachmentUpload({
+        environmentId: firstEnvironment,
+        image: file,
+        draftTarget: draftId,
+      });
+      await awaitAttachmentUploads([file.id]);
 
-    expect(readAttachmentUpload(file.id)).toEqual({
-      status: "ready",
-      environmentId: firstEnvironment,
-      attachmentId: "pending-flaky-pdf",
-    });
-    const removeCalls = mocks.runAtomCommand.mock.calls.filter(
-      ([, command]) => command === mocks.removeUpload,
-    );
-    expect(removeCalls).toEqual([]);
+      expect(readAttachmentUpload(file.id)).toEqual({
+        status: "ready",
+        environmentId: firstEnvironment,
+        attachmentId: "pending-flaky-pdf",
+      });
+      expect(useComposerDraftStore.getState().getComposerDraft(draftId)?.files).toMatchObject([
+        {
+          uploadedAttachmentId: "pending-flaky-pdf",
+          uploadEnvironmentId: firstEnvironment,
+        },
+      ]);
+      const removeCalls = mocks.runAtomCommand.mock.calls.filter(
+        ([, command]) => command === mocks.removeUpload,
+      );
+      expect(removeCalls).toEqual([]);
+    } finally {
+      useComposerDraftStore.getState().clearComposerContent(draftId);
+    }
   });
 
   it("keeps the persisted upload when an environment switch cancels its verification", async () => {

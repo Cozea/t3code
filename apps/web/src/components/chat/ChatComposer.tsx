@@ -4023,6 +4023,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           const files = Array.from(event.currentTarget.files ?? []);
                           event.currentTarget.value = "";
                           void addComposerAttachments(files);
+                          focusComposer();
                         }}
                       />
                       <Tooltip>

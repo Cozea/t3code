@@ -111,13 +111,14 @@ function deletePendingUpload(environmentId: EnvironmentId, attachmentId: string)
 function uploadBytes(input: {
   readonly url: string;
   readonly file: File;
+  readonly mimeType: string;
   readonly onProgress: (progress: number) => void;
 }): { readonly done: Promise<void>; readonly abort: () => void } {
   const xhr = new XMLHttpRequest();
   const done = new Promise<void>((resolve, reject) => {
     xhr.open("POST", input.url, true);
     xhr.timeout = UPLOAD_TIMEOUT_MS;
-    xhr.setRequestHeader("Content-Type", input.file.type);
+    xhr.setRequestHeader("Content-Type", input.mimeType);
     xhr.upload.addEventListener("progress", (event) => {
       if (event.lengthComputable && event.total > 0) {
         input.onProgress(event.loaded / event.total);
@@ -157,6 +158,23 @@ async function runUpload(job: UploadJob): Promise<void> {
         attachmentId: job.persistedAttachmentId,
       });
       stampDraftFileUpload(job, job.persistedAttachmentId);
+      return;
+    }
+    if (
+      verification.status === "missing" &&
+      !job.image.file &&
+      job.draftTarget !== undefined &&
+      job.image.type === "file" &&
+      useComposerDraftStore
+        .getState()
+        .markFileUploadMissing(
+          job.draftTarget,
+          job.image.id,
+          job.environmentId,
+          job.persistedAttachmentId,
+        )
+    ) {
+      clearUploadState(job.image.id);
       return;
     }
     if (verification.status === "failed" || !job.image.file) {
@@ -223,6 +241,7 @@ async function runUpload(job: UploadJob): Promise<void> {
       uploadBytes({
         url,
         file,
+        mimeType,
         onProgress: (progress) => {
           const step = Math.floor(progress * 20);
           if (step === lastStep || job.cancelled) {
