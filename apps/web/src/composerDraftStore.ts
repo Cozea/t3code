@@ -1049,16 +1049,13 @@ export function deriveEffectiveComposerModelState(input: {
   const activeSelectionInstanceId = instanceSelection
     ? (input.selectedInstanceId ?? ProviderInstanceId.make(input.selectedProvider))
     : ProviderInstanceId.make(input.selectedProvider);
-  const preserveActiveSelection =
-    input.threadModelSelection?.instanceId === activeSelectionInstanceId &&
-    input.selectedInstanceId === activeSelectionInstanceId;
   const selectedModel = activeSelection?.model
     ? (resolveAppModelSelectionForInstance(
         activeSelectionInstanceId,
         input.settings,
         input.providers,
         activeSelection.model,
-        { preserveUnavailableSelection: preserveActiveSelection },
+        { preserveUnavailableSelection: true },
       ) ??
       resolveAppModelSelection(
         input.selectedProvider,

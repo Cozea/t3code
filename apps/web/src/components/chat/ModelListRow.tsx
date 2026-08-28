@@ -34,6 +34,7 @@ export const ModelListRow = memo(function ModelListRow(props: {
   preferShortName?: boolean;
   useTriggerLabel?: boolean;
   showNewBadge?: boolean;
+  unavailable?: boolean;
   jumpLabel?: string | null;
   disabledReason?: string | null;
   onToggleFavorite: () => void;
@@ -73,6 +74,11 @@ export const ModelListRow = memo(function ModelListRow(props: {
               aria-label="New model"
             >
               New
+            </span>
+          ) : null}
+          {props.unavailable ? (
+            <span className="shrink-0 rounded border border-border bg-muted/50 px-1 py-px text-[10px] font-medium leading-none text-muted-foreground">
+              Unavailable
             </span>
           ) : null}
         </div>

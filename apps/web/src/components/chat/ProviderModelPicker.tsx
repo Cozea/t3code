@@ -63,7 +63,9 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   // different model that the next message will not use.
   const selectedModel = selectedInstanceOptions.find((option) => option.slug === props.model);
   const triggerTitle = selectedModel ? getTriggerDisplayModelName(selectedModel) : props.model;
-  const triggerLabel = selectedModel ? getTriggerDisplayModelLabel(selectedModel) : props.model;
+  const triggerLabel = selectedModel
+    ? `${getTriggerDisplayModelLabel(selectedModel)}${selectedModel.isUnavailable ? " (Unavailable)" : ""}`
+    : props.model;
   const showInstanceBadge =
     activeEntry !== null && shouldShowInstanceBadge(activeEntry, props.instanceEntries);
 
@@ -176,6 +178,11 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
             </TooltipTrigger>
             <TooltipPopup side="top">{triggerLabel}</TooltipPopup>
           </Tooltip>
+          {selectedModel?.isUnavailable ? (
+            <span className="shrink-0 text-[10px] font-medium text-muted-foreground">
+              Unavailable
+            </span>
+          ) : null}
         </span>
         <span aria-hidden="true" className="flex items-center">
           <ComposerControlChevron />

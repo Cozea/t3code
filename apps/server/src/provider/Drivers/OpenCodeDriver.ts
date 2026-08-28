@@ -144,6 +144,10 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
       });
       const serverOwner = yield* OpenCodeServerOwner.make({
         binaryPath: effectiveConfig.binaryPath,
+        directory: serverConfig.cwd,
+        ...(effectiveConfig.serverPassword
+          ? { serverPassword: effectiveConfig.serverPassword }
+          : {}),
         environment: processEnv,
       });
       const textGeneration = yield* makeOpenCodeTextGeneration(effectiveConfig).pipe(

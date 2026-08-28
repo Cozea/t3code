@@ -12,6 +12,7 @@ import { ServerConfig } from "../../config.ts";
 import {
   OpenCodeRuntime,
   OpenCodeRuntimeError,
+  resolveOpenCodeServerPassword,
   type OpenCodeRuntimeShape,
 } from "../opencodeRuntime.ts";
 import * as OpenCodeServerOwner from "../OpenCodeServerOwner.ts";
@@ -35,6 +36,7 @@ const runtimeMock = {
     runVersionError: null as Error | null,
     versionStdout: DEFAULT_VERSION_STDOUT,
     inventoryError: null as Error | null,
+    connectionError: null as Error | null,
     inventoryCwd: null as string | null,
     closeCalls: 0,
     sdkClientInputs: [] as Array<{
@@ -52,6 +54,7 @@ const runtimeMock = {
     this.state.runVersionError = null;
     this.state.versionStdout = DEFAULT_VERSION_STDOUT;
     this.state.inventoryError = null;
+    this.state.connectionError = null;
     this.state.inventoryCwd = null;
     this.state.closeCalls = 0;
     this.state.sdkClientInputs.length = 0;
@@ -64,21 +67,37 @@ const runtimeMock = {
 };
 
 const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
-  startOpenCodeServerProcess: () =>
+  startOpenCodeServerProcess: ({ serverPassword, environment }) =>
     Effect.gen(function* () {
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
           runtimeMock.state.closeCalls += 1;
         }),
       );
+      const effectiveServerPassword = resolveOpenCodeServerPassword({
+        external: false,
+        ...(serverPassword !== undefined ? { serverPassword } : {}),
+        ...(environment !== undefined ? { environment } : {}),
+      });
       return {
         url: "http://127.0.0.1:4301",
+        ...(effectiveServerPassword !== undefined
+          ? { serverPassword: effectiveServerPassword }
+          : {}),
+        version: "1.14.19",
         isRunning: Effect.succeed(true),
         exitCode: Effect.never,
       };
     }),
-  connectToOpenCodeServer: ({ serverUrl }) =>
+  connectToOpenCodeServer: ({ serverUrl, serverPassword }) =>
     Effect.gen(function* () {
+      if (runtimeMock.state.connectionError) {
+        return yield* new OpenCodeRuntimeError({
+          operation: "global.health",
+          detail: runtimeMock.state.connectionError.message,
+          cause: runtimeMock.state.connectionError,
+        });
+      }
       if (!serverUrl) {
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => {
@@ -88,6 +107,8 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
       }
       return {
         url: serverUrl ?? "http://127.0.0.1:4301",
+        ...(serverPassword ? { serverPassword } : {}),
+        version: "1.14.19",
         exitCode: null,
         external: Boolean(serverUrl),
       };
@@ -158,6 +179,8 @@ const checkProvider = Effect.fn("checkProvider")(function* (
     Effect.gen(function* () {
       const serverOwner = yield* OpenCodeServerOwner.make({
         binaryPath: settings.binaryPath,
+        directory: cwd,
+        ...(settings.serverPassword ? { serverPassword: settings.serverPassword } : {}),
         ...(environment ? { environment } : {}),
       });
       return yield* checkOpenCodeProviderStatus(settings, cwd, environment).pipe(
@@ -331,6 +354,34 @@ it.layer(testLayer)("checkOpenCodeProviderStatus", (it) => {
     }),
   );
 
+  it.effect("uses an environment-only password for local inventory", () =>
+    Effect.gen(function* () {
+      yield* checkProvider(makeOpenCodeSettings(), process.cwd(), {
+        OPENCODE_SERVER_PASSWORD: "environment-password",
+      });
+
+      NodeAssert.deepEqual(runtimeMock.state.sdkClientInputs, [
+        {
+          baseUrl: "http://127.0.0.1:4301",
+          directory: process.cwd(),
+          serverPassword: "environment-password",
+        },
+      ]);
+    }),
+  );
+
+  it.effect("uses the settings password when local environment auth differs", () =>
+    Effect.gen(function* () {
+      yield* checkProvider(
+        makeOpenCodeSettings({ serverPassword: "settings-password" }),
+        process.cwd(),
+        { OPENCODE_SERVER_PASSWORD: "environment-password" },
+      );
+
+      NodeAssert.equal(runtimeMock.state.sdkClientInputs[0]?.serverPassword, "settings-password");
+    }),
+  );
+
   it.effect("reports local model inventory failures without treating them as empty", () =>
     Effect.gen(function* () {
       runtimeMock.state.inventoryError = new Error("opencode models failed");
@@ -348,9 +399,43 @@ it.layer(testLayer)("checkOpenCodeProviderStatus", (it) => {
 });
 
 it.layer(testLayer)("checkOpenCodeProviderStatus with configured server URL", (it) => {
+  it.effect("does not send a local environment password to a configured server", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* checkProvider(
+        makeOpenCodeSettings({ serverUrl: "http://127.0.0.1:9999" }),
+        process.cwd(),
+        { OPENCODE_SERVER_PASSWORD: "local-secret" },
+      );
+
+      NodeAssert.equal(snapshot.version, "1.14.19");
+      NodeAssert.deepEqual(runtimeMock.state.sdkClientInputs, [
+        {
+          baseUrl: "http://127.0.0.1:9999",
+          directory: process.cwd(),
+        },
+      ]);
+    }),
+  );
+
+  it.effect("rejects an unsupported server before loading inventory", () =>
+    Effect.gen(function* () {
+      runtimeMock.state.connectionError = new Error(
+        "OpenCode v1.14.18 is too old. Upgrade to v1.14.19 or newer.",
+      );
+      const snapshot = yield* checkProvider(
+        makeOpenCodeSettings({ serverUrl: "http://127.0.0.1:9999" }),
+      );
+
+      NodeAssert.equal(snapshot.status, "error");
+      NodeAssert.equal(snapshot.models.length, 0);
+      NodeAssert.match(snapshot.message ?? "", /v1\.14\.18 is too old/);
+      NodeAssert.equal(runtimeMock.state.sdkClientInputs.length, 0);
+    }),
+  );
+
   it.effect("surfaces a friendly auth error for configured servers", () =>
     Effect.gen(function* () {
-      runtimeMock.state.inventoryError = new Error("401 Unauthorized");
+      runtimeMock.state.connectionError = new Error("401 Unauthorized");
       const snapshot = yield* checkProvider(
         makeOpenCodeSettings({
           serverUrl: "http://127.0.0.1:9999",
@@ -369,7 +454,7 @@ it.layer(testLayer)("checkOpenCodeProviderStatus with configured server URL", (i
 
   it.effect("surfaces a friendly connection error for configured servers", () =>
     Effect.gen(function* () {
-      runtimeMock.state.inventoryError = new Error(
+      runtimeMock.state.connectionError = new Error(
         "fetch failed: connect ECONNREFUSED 127.0.0.1:9999",
       );
       const snapshot = yield* checkProvider(

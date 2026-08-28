@@ -475,25 +475,17 @@ export const ProviderRegistryLive = Layer.effect(
       );
     });
 
-    const refreshAll = Effect.fn("refreshAll")(function* (
-      exclude?: ReadonlySet<ProviderDriverKind>,
-    ) {
+    const refreshAll = Effect.fn("refreshAll")(function* () {
       const sources = yield* getLiveSources;
-      const sourcesToRefresh = exclude
-        ? sources.filter((source) => !exclude.has(source.driverKind))
-        : sources;
-      return yield* Effect.forEach(sourcesToRefresh, (source) => refreshOneSource(source), {
+      return yield* Effect.forEach(sources, (source) => refreshOneSource(source), {
         concurrency: "unbounded",
         discard: true,
       }).pipe(Effect.andThen(Ref.get(providersRef)));
     });
 
-    const refresh = Effect.fn("refresh")(function* (
-      provider?: ProviderDriverKind,
-      options?: { readonly exclude?: ReadonlySet<ProviderDriverKind> },
-    ) {
+    const refresh = Effect.fn("refresh")(function* (provider?: ProviderDriverKind) {
       if (provider === undefined) {
-        return yield* refreshAll(options?.exclude);
+        return yield* refreshAll();
       }
       // Kind-scoped refreshes target the default instance for that driver.
       const defaultInstanceId = defaultInstanceIdForDriver(provider);
@@ -728,10 +720,8 @@ export const ProviderRegistryLive = Layer.effect(
 
     return {
       getProviders: Ref.get(providersRef),
-      refresh: (
-        provider?: ProviderDriverKind,
-        options?: { readonly exclude?: ReadonlySet<ProviderDriverKind> },
-      ) => refresh(provider, options).pipe(Effect.catchCause(recoverRefreshFailure)),
+      refresh: (provider?: ProviderDriverKind) =>
+        refresh(provider).pipe(Effect.catchCause(recoverRefreshFailure)),
       refreshInstance: (instanceId: ProviderInstanceId) =>
         refreshInstance(instanceId).pipe(Effect.catchCause(recoverRefreshFailure)),
       getProviderMaintenanceCapabilitiesForInstance,

@@ -200,13 +200,16 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
     });
 
     const runAgainstServer = Effect.fn("runOpenCodeJson.runAgainstServer")(
-      function* (server: Pick<OpenCodeRuntime.OpenCodeServerConnection, "url">) {
+      function* (
+        server: Pick<
+          OpenCodeRuntime.OpenCodeServerConnection,
+          "url" | "serverPassword" | "version"
+        >,
+      ) {
         const client = openCodeRuntime.createOpenCodeSdkClient({
           baseUrl: server.url,
           directory: input.cwd,
-          ...(openCodeSettings.serverPassword
-            ? { serverPassword: openCodeSettings.serverPassword }
-            : {}),
+          ...(server.serverPassword !== undefined ? { serverPassword: server.serverPassword } : {}),
         });
         const session = yield* Effect.tryPromise({
           try: () =>
@@ -315,20 +318,30 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       }),
     );
 
-    const rawOutput =
+    const serverOutput =
       openCodeSettings.serverUrl.length > 0
-        ? yield* runAgainstServer({ url: openCodeSettings.serverUrl })
-        : yield* serverOwner.withServer(runAgainstServer).pipe(
-            Effect.mapError((cause) =>
-              OpenCodeRuntime.OpenCodeRuntimeError.is(cause)
-                ? new TextGenerationError({
-                    operation: input.operation,
-                    detail: OpenCodeRuntime.openCodeRuntimeErrorDetail(cause),
-                    cause,
-                  })
-                : cause,
-            ),
-          );
+        ? openCodeRuntime
+            .connectToOpenCodeServer({
+              binaryPath: openCodeSettings.binaryPath,
+              directory: input.cwd,
+              serverUrl: openCodeSettings.serverUrl,
+              ...(openCodeSettings.serverPassword
+                ? { serverPassword: openCodeSettings.serverPassword }
+                : {}),
+            })
+            .pipe(Effect.flatMap(runAgainstServer), Effect.scoped)
+        : serverOwner.withServer(runAgainstServer);
+    const rawOutput = yield* serverOutput.pipe(
+      Effect.mapError((cause) =>
+        OpenCodeRuntime.OpenCodeRuntimeError.is(cause)
+          ? new TextGenerationError({
+              operation: input.operation,
+              detail: OpenCodeRuntime.openCodeRuntimeErrorDetail(cause),
+              cause,
+            })
+          : cause,
+      ),
+    );
 
     const decodeOutput = Schema.decodeEffect(Schema.fromJsonString(input.outputSchemaJson));
     return yield* decodeOutput(extractJsonObject(rawOutput)).pipe(

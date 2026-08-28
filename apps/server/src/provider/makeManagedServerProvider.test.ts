@@ -250,6 +250,40 @@ describe("makeManagedServerProvider", () => {
     ).pipe(Effect.provide(Layer.mergeAll(AlwaysRunTestLayer, TestClock.layer()))),
   );
 
+  it.effect("keeps manual refresh when interval refresh is disabled", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const checkCalls = yield* Ref.make(0);
+        const initialCheckDone = yield* Deferred.make<void>();
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          maintenanceCapabilities,
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
+          initialSnapshot: () => Effect.succeed(initialSnapshot),
+          checkProvider: Ref.updateAndGet(checkCalls, (count) => count + 1).pipe(
+            Effect.tap((count) =>
+              count === 1
+                ? Deferred.succeed(initialCheckDone, undefined).pipe(Effect.ignore)
+                : Effect.void,
+            ),
+            Effect.as(refreshedSnapshot),
+          ),
+          refreshInterval: "1 second",
+          refreshOnInterval: false,
+        });
+
+        yield* Deferred.await(initialCheckDone);
+        yield* TestClock.adjust("5 minutes");
+        yield* Effect.yieldNow;
+        assert.strictEqual(yield* Ref.get(checkCalls), 1);
+
+        yield* provider.refresh;
+        assert.strictEqual(yield* Ref.get(checkCalls), 2);
+      }),
+    ).pipe(Effect.provide(Layer.mergeAll(AlwaysRunTestLayer, TestClock.layer()))),
+  );
+
   it.effect("wakes a sleeping provider refresh loop when its interval changes", () =>
     Effect.scoped(
       Effect.gen(function* () {

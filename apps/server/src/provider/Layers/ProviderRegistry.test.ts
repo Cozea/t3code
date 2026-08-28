@@ -945,7 +945,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         }),
       );
 
-      it.effect("refreshes other providers while excluding OpenCode", () =>
+      it.effect("refreshes OpenCode catalogs and preserves other providers", () =>
         Effect.gen(function* () {
           const codexDriver = ProviderDriverKind.make("codex");
           const openCodeDriver = ProviderDriverKind.make("opencode");
@@ -953,12 +953,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           const openCodeInstanceId = ProviderInstanceId.make("opencode");
           const codexRefreshCalls = yield* Ref.make(0);
           const openCodeRefreshCalls = yield* Ref.make(0);
-          const makeProvider = (
-            instanceId: ProviderInstanceId,
-            driver: ProviderDriverKind,
-          ): ServerProvider => ({
-            instanceId,
-            driver,
+          const codexProvider = {
+            instanceId: codexInstanceId,
+            driver: codexDriver,
             status: "ready",
             enabled: true,
             installed: true,
@@ -968,49 +965,99 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             models: [],
             slashCommands: [],
             skills: [],
-          });
-          const makeInstance = (input: {
-            readonly instanceId: ProviderInstanceId;
-            readonly driver: ProviderDriverKind;
-            readonly refreshCalls: Ref.Ref<number>;
-          }): ProviderInstance => {
-            const provider = makeProvider(input.instanceId, input.driver);
-            return {
-              instanceId: input.instanceId,
-              driverKind: input.driver,
+          } as const satisfies ServerProvider;
+          const failedOpenCodeProvider = {
+            instanceId: openCodeInstanceId,
+            driver: openCodeDriver,
+            status: "error",
+            enabled: true,
+            installed: true,
+            auth: { status: "unknown" },
+            checkedAt: "2026-06-10T00:00:00.000Z",
+            version: "1.0.0",
+            message: "Failed to refresh OpenCode models.",
+            models: [],
+            slashCommands: [],
+            skills: [],
+          } as const satisfies ServerProvider;
+          const recoveredOpenCodeProvider = {
+            ...failedOpenCodeProvider,
+            status: "ready",
+            auth: { status: "authenticated" },
+            checkedAt: "2026-06-10T00:01:00.000Z",
+            message: "One upstream provider connected through OpenCode.",
+            models: [
+              {
+                slug: "github/gpt-5",
+                name: "GPT-5",
+                subProvider: "GitHub",
+                isCustom: false,
+                capabilities: null,
+              },
+            ],
+          } as const satisfies ServerProvider;
+          const changedCatalogProvider = {
+            ...recoveredOpenCodeProvider,
+            checkedAt: "2026-06-10T00:02:00.000Z",
+            models: [
+              {
+                slug: "anthropic/claude-sonnet-4",
+                name: "Claude Sonnet 4",
+                subProvider: "Anthropic",
+                isCustom: false,
+                capabilities: null,
+              },
+            ],
+          } as const satisfies ServerProvider;
+          const catalogSnapshot = yield* Ref.make<ServerProvider>(recoveredOpenCodeProvider);
+          const instances = [
+            {
+              instanceId: codexInstanceId,
+              driverKind: codexDriver,
               continuationIdentity: {
-                driverKind: input.driver,
-                continuationKey: `${input.driver}:instance:${input.instanceId}`,
+                driverKind: codexDriver,
+                continuationKey: "codex:instance:codex",
               },
               displayName: undefined,
               enabled: true,
               snapshot: {
                 maintenanceCapabilities: makeManualOnlyProviderMaintenanceCapabilities({
-                  provider: input.driver,
+                  provider: codexDriver,
                   packageName: null,
                 }),
-                getSnapshot: Effect.succeed(provider),
-                refresh: Ref.update(input.refreshCalls, (count) => count + 1).pipe(
-                  Effect.as(provider),
+                getSnapshot: Effect.succeed(codexProvider),
+                refresh: Ref.update(codexRefreshCalls, (count) => count + 1).pipe(
+                  Effect.as(codexProvider),
                 ),
                 streamChanges: Stream.empty,
               },
               adapter: {} as ProviderInstance["adapter"],
               textGeneration: {} as ProviderInstance["textGeneration"],
-            };
-          };
-          const instances = [
-            makeInstance({
-              instanceId: codexInstanceId,
-              driver: codexDriver,
-              refreshCalls: codexRefreshCalls,
-            }),
-            makeInstance({
+            },
+            {
               instanceId: openCodeInstanceId,
-              driver: openCodeDriver,
-              refreshCalls: openCodeRefreshCalls,
-            }),
-          ];
+              driverKind: openCodeDriver,
+              continuationIdentity: {
+                driverKind: openCodeDriver,
+                continuationKey: "opencode:instance:opencode",
+              },
+              displayName: undefined,
+              enabled: true,
+              snapshot: {
+                maintenanceCapabilities: makeManualOnlyProviderMaintenanceCapabilities({
+                  provider: openCodeDriver,
+                  packageName: null,
+                }),
+                getSnapshot: Effect.succeed(failedOpenCodeProvider),
+                refresh: Ref.update(openCodeRefreshCalls, (count) => count + 1).pipe(
+                  Effect.andThen(Ref.get(catalogSnapshot)),
+                ),
+                streamChanges: Stream.empty,
+              },
+              adapter: {} as ProviderInstance["adapter"],
+              textGeneration: {} as ProviderInstance["textGeneration"],
+            },
+          ] satisfies ReadonlyArray<ProviderInstance>;
           const instanceRegistryLayer = Layer.succeed(
             ProviderInstanceRegistry.ProviderInstanceRegistry,
             {
@@ -1029,7 +1076,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               Layer.provideMerge(instanceRegistryLayer),
               Layer.provideMerge(
                 ServerConfig.layerTest(process.cwd(), {
-                  prefix: "t3-provider-registry-excluded-refresh-",
+                  prefix: "t3-provider-registry-reconnect-refresh-",
                 }),
               ),
               Layer.provideMerge(NodeServices.layer),
@@ -1038,11 +1085,39 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
 
           yield* Effect.gen(function* () {
             const registry = yield* ProviderRegistry.ProviderRegistry;
-            yield* registry.refresh(undefined, { exclude: new Set([openCodeDriver]) });
+            const initialProviders = yield* registry.getProviders;
+            assert.strictEqual(
+              initialProviders.find((provider) => provider.instanceId === openCodeInstanceId)
+                ?.status,
+              "error",
+            );
+
+            const recoveredProviders = yield* registry.refresh();
+            assert.deepStrictEqual(
+              recoveredProviders.find((provider) => provider.instanceId === openCodeInstanceId)
+                ?.models,
+              recoveredOpenCodeProvider.models,
+            );
+            assert.deepStrictEqual(
+              recoveredProviders.find((provider) => provider.instanceId === codexInstanceId),
+              codexProvider,
+            );
+
+            yield* Ref.set(catalogSnapshot, changedCatalogProvider);
+            const changedProviders = yield* registry.refresh();
+            assert.deepStrictEqual(
+              changedProviders.find((provider) => provider.instanceId === openCodeInstanceId)
+                ?.models,
+              changedCatalogProvider.models,
+            );
+            assert.deepStrictEqual(
+              changedProviders.find((provider) => provider.instanceId === codexInstanceId),
+              codexProvider,
+            );
           }).pipe(Effect.provide(runtimeServices));
 
-          assert.strictEqual(yield* Ref.get(codexRefreshCalls), 1);
-          assert.strictEqual(yield* Ref.get(openCodeRefreshCalls), 0);
+          assert.strictEqual(yield* Ref.get(codexRefreshCalls), 2);
+          assert.strictEqual(yield* Ref.get(openCodeRefreshCalls), 2);
         }),
       );
 

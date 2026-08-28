@@ -4874,28 +4874,22 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("skips OpenCode only for the subscribeServerConfig background refresh", () =>
+  it.effect("refreshes providers for each subscribeServerConfig connection", () =>
     Effect.gen(function* () {
-      const refreshCalls = yield* Ref.make<
-        ReadonlyArray<{
-          readonly provider: ProviderDriverKind | undefined;
-          readonly exclude: ReadonlySet<ProviderDriverKind> | undefined;
-        }>
-      >([]);
-      const subscriptionRefreshDone = yield* Deferred.make<void>();
+      const refreshCalls = yield* Ref.make(0);
+      const firstRefreshDone = yield* Deferred.make<void>();
+      const secondRefreshDone = yield* Deferred.make<void>();
 
       yield* buildAppUnderTest({
         layers: {
           providerRegistry: {
-            refresh: (provider, options) =>
-              Ref.update(refreshCalls, (calls) => [
-                ...calls,
-                { provider, exclude: options?.exclude },
-              ]).pipe(
-                Effect.andThen(
-                  options?.exclude
-                    ? Deferred.succeed(subscriptionRefreshDone, undefined).pipe(Effect.ignore)
-                    : Effect.void,
+            refresh: () =>
+              Ref.updateAndGet(refreshCalls, (count) => count + 1).pipe(
+                Effect.tap((count) =>
+                  Deferred.succeed(
+                    count === 1 ? firstRefreshDone : secondRefreshDone,
+                    undefined,
+                  ).pipe(Effect.ignore),
                 ),
                 Effect.as([]),
               ),
@@ -4907,25 +4901,21 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
           Effect.gen(function* () {
-            const snapshotFiber = yield* client[WS_METHODS.subscribeServerConfig]({}).pipe(
-              Stream.runHead,
-              Effect.forkChild,
-            );
-            yield* Deferred.await(subscriptionRefreshDone);
-            yield* client[WS_METHODS.serverRefreshProviders]({});
-            yield* Fiber.join(snapshotFiber);
+            yield* client[WS_METHODS.subscribeServerConfig]({}).pipe(Stream.runHead);
+            yield* Deferred.await(firstRefreshDone);
+          }),
+        ),
+      );
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            yield* client[WS_METHODS.subscribeServerConfig]({}).pipe(Stream.runHead);
+            yield* Deferred.await(secondRefreshDone);
           }),
         ),
       );
 
-      const calls = yield* Ref.get(refreshCalls);
-      assert.equal(calls.length, 2);
-      assert.equal(calls[0]?.provider, undefined);
-      assert.deepEqual(calls[0]?.exclude ? Array.from(calls[0].exclude) : [], [
-        ProviderDriverKind.make("opencode"),
-      ]);
-      assert.equal(calls[1]?.provider, undefined);
-      assert.equal(calls[1]?.exclude, undefined);
+      assert.equal(yield* Ref.get(refreshCalls), 2);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

@@ -49,7 +49,6 @@ import {
   ProjectSearchEntriesError,
   ProjectWriteFileError,
   ProviderUploadFeedbackError,
-  ProviderDriverKind,
   RelayClientInstallFailedError,
   type RelayClientInstallProgressEvent,
   type ServerSelfUpdateError,
@@ -2396,9 +2395,7 @@ const makeWsRpcLayer = (
               );
 
               yield* providerRegistry
-                .refresh(undefined, {
-                  exclude: new Set([ProviderDriverKind.make("opencode")]),
-                })
+                .refresh()
                 .pipe(Effect.ignoreCause({ log: true }), Effect.forkScoped);
 
               const liveUpdates = Stream.merge(
