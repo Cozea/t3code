@@ -14,6 +14,7 @@ import type {
 import {
   ApprovalRequestId,
   ClaudeSettings,
+  EnvironmentId,
   ProviderDriverKind,
   ProviderItemId,
   ProviderRuntimeEvent,
@@ -34,6 +35,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterProcessError, ProviderAdapterValidationError } from "../Errors.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
@@ -267,6 +269,51 @@ const THREAD_ID = ThreadId.make("thread-claude-1");
 const RESUME_THREAD_ID = ThreadId.make("thread-claude-resume");
 
 describe("ClaudeAdapterLive", () => {
+  it.effect("appends the managed preview policy when the T3 MCP session is attached", () => {
+    const harness = makeHarness();
+    const threadId = ThreadId.make("thread-claude-preview-tools");
+    McpProviderSession.setMcpProviderSession({
+      environmentId: EnvironmentId.make("environment-preview-tools"),
+      threadId,
+      providerSessionId: "provider-session-preview-tools",
+      providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+      endpoint: "http://127.0.0.1:4312/mcp",
+      authorizationHeader: "Bearer test-preview-token",
+    });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      const systemPrompt = harness.getLastCreateQueryInput()?.options.systemPrompt;
+      assert.equal(typeof systemPrompt, "object");
+      if (typeof systemPrompt !== "object" || systemPrompt === null) {
+        return;
+      }
+      assert.match(
+        String("append" in systemPrompt ? systemPrompt.append : ""),
+        /dev_server_ensure/,
+      );
+      const mcpServer = harness.getLastCreateQueryInput()?.options.mcpServers?.["t3-code"];
+      assert.equal(
+        mcpServer && "url" in mcpServer ? mcpServer.url : undefined,
+        "http://127.0.0.1:4312/mcp",
+      );
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          McpProviderSession.clearMcpProviderSession(threadId);
+        }),
+      ),
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("returns validation error for non-claude provider on startSession", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

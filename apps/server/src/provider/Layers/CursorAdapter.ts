@@ -43,6 +43,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { acpPreviewToolInstructionBlock } from "../PreviewToolInstructions.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -968,6 +969,12 @@ export function makeCursorAdapter(
           }
 
           const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
+          const previewInstructions = acpPreviewToolInstructionBlock(
+            McpProviderSession.readMcpProviderSession(input.threadId) !== undefined,
+          );
+          if (previewInstructions) {
+            promptParts.push({ type: "text", text: previewInstructions });
+          }
           if (input.input?.trim()) {
             promptParts.push({ type: "text", text: input.input.trim() });
           }
