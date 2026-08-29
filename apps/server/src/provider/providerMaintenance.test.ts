@@ -8,7 +8,7 @@ import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import { HttpClient } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import {
   createProviderVersionAdvisory,
   enrichProviderSnapshotWithVersionAdvisory,
@@ -35,6 +35,13 @@ const packageToolUpdate = makePackageManagedProviderMaintenanceResolver({
   provider: driver("packageTool"),
   npmPackageName: "@example/package-tool",
   homebrewFormula: "package-tool",
+  nativeUpdate: null,
+});
+const caskPackageToolUpdate = makePackageManagedProviderMaintenanceResolver({
+  provider: driver("caskPackageTool"),
+  npmPackageName: "@example/cask-package-tool",
+  homebrewFormula: "cask-package-tool",
+  homebrewPackageType: "cask",
   nativeUpdate: null,
 });
 const nativePackageToolUpdate = makePackageManagedProviderMaintenanceResolver({
@@ -108,6 +115,36 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
       }),
     ),
   );
+
+  it.effect("reads Homebrew cask versions from the Homebrew release channel", () => {
+    let requestedUrl = "";
+    return resolveLatestProviderVersion(
+      caskPackageToolUpdate.resolve({
+        binaryPath: "/opt/homebrew/Caskroom/cask-package-tool/1.2.3/bin/cask-package-tool",
+      }),
+    ).pipe(
+      Effect.provideService(ProviderVersionCache, new Map()),
+      Effect.provideService(
+        HttpClient.HttpClient,
+        HttpClient.make((request) => {
+          requestedUrl = request.url;
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              Response.json(
+                { version: "1.2.3" },
+                { headers: { "content-type": "application/json" } },
+              ),
+            ),
+          );
+        }),
+      ),
+      Effect.map((version) => {
+        expect(version).toBe("1.2.3");
+        expect(requestedUrl).toBe("https://formulae.brew.sh/api/cask/cask-package-tool.json");
+      }),
+    );
+  });
 
   it.effect("does not fetch latest provider versions when update checks are disabled", () =>
     enrichProviderSnapshotWithVersionAdvisory(
@@ -320,12 +357,17 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
     ).toEqual({
       provider: driver("packageTool"),
       packageName: "@example/package-tool",
+      latestVersionSource: {
+        kind: "homebrew",
+        packageName: "package-tool",
+        packageType: "formula",
+      },
       update: {
-        command: "brew upgrade package-tool",
+        command: "brew upgrade --formula package-tool",
 
         executable: "brew",
 
-        args: ["upgrade", "package-tool"],
+        args: ["upgrade", "--formula", "package-tool"],
 
         lockKey: "homebrew",
       },
@@ -417,12 +459,17 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
     ).toEqual({
       provider: driver("nativePackageTool"),
       packageName: "@example/native-package-tool",
+      latestVersionSource: {
+        kind: "homebrew",
+        packageName: "native-package-tool",
+        packageType: "formula",
+      },
       update: {
-        command: "brew upgrade native-package-tool",
+        command: "brew upgrade --formula native-package-tool",
 
         executable: "brew",
 
-        args: ["upgrade", "native-package-tool"],
+        args: ["upgrade", "--formula", "native-package-tool"],
 
         lockKey: "homebrew",
       },
@@ -440,12 +487,17 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
     ).toEqual({
       provider: driver("scopedPackageTool"),
       packageName: "@example/scoped-package-tool",
+      latestVersionSource: {
+        kind: "homebrew",
+        packageName: "example/tap/scoped-package-tool",
+        packageType: "formula",
+      },
       update: {
-        command: "brew upgrade example/tap/scoped-package-tool",
+        command: "brew upgrade --formula example/tap/scoped-package-tool",
 
         executable: "brew",
 
-        args: ["upgrade", "example/tap/scoped-package-tool"],
+        args: ["upgrade", "--formula", "example/tap/scoped-package-tool"],
 
         lockKey: "homebrew",
       },

@@ -37,9 +37,21 @@ const CommandLookupEnvConfig = Config.all({
 
 const readCommandLookupEnv = CommandLookupEnvConfig.pipe(Effect.orElseSucceed(() => ({})));
 
+export type ProviderLatestVersionSource =
+  | {
+      readonly kind: "npm";
+      readonly packageName: string;
+    }
+  | {
+      readonly kind: "homebrew";
+      readonly packageName: string;
+      readonly packageType: "formula" | "cask";
+    };
+
 export interface ProviderMaintenanceCapabilities {
   readonly provider: ProviderDriverKind;
   readonly packageName: string | null;
+  readonly latestVersionSource?: ProviderLatestVersionSource;
   readonly update: ProviderMaintenanceCommandAction | null;
 }
 
@@ -67,6 +79,7 @@ export interface PackageManagedProviderMaintenanceDefinition {
   readonly provider: ProviderDriverKind;
   readonly npmPackageName: string;
   readonly homebrewFormula: string | null;
+  readonly homebrewPackageType?: "formula" | "cask";
   readonly nativeUpdate: {
     readonly executable: string;
     readonly args: ReadonlyArray<string>;
@@ -89,6 +102,16 @@ export const ProviderVersionCache = Context.Reference<Map<string, ProviderVersio
 const NpmLatestVersionResponse = Schema.Struct({
   version: Schema.optional(Schema.String),
 });
+const HomebrewCaskLatestVersionResponse = Schema.Struct({
+  version: Schema.optional(Schema.String),
+});
+const HomebrewFormulaLatestVersionResponse = Schema.Struct({
+  versions: Schema.optional(
+    Schema.Struct({
+      stable: Schema.optional(Schema.NullOr(Schema.String)),
+    }),
+  ),
+});
 
 function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
@@ -97,6 +120,7 @@ function nonEmptyString(value: unknown): string | null {
 export function makeProviderMaintenanceCapabilities(input: {
   readonly provider: ProviderDriverKind;
   readonly packageName: string | null;
+  readonly latestVersionSource?: ProviderLatestVersionSource;
   readonly updateExecutable: string | null;
   readonly updateArgs: ReadonlyArray<string>;
   readonly updateLockKey: string | null;
@@ -113,6 +137,7 @@ export function makeProviderMaintenanceCapabilities(input: {
   return {
     provider: input.provider,
     packageName: input.packageName,
+    ...(input.latestVersionSource ? { latestVersionSource: input.latestVersionSource } : {}),
     update,
   };
 }
@@ -201,8 +226,17 @@ function makeHomebrewProviderMaintenanceCapabilities(
   return makeProviderMaintenanceCapabilities({
     provider: definition.provider,
     packageName: definition.npmPackageName,
+    latestVersionSource: {
+      kind: "homebrew",
+      packageName: definition.homebrewFormula,
+      packageType: definition.homebrewPackageType ?? "formula",
+    },
     updateExecutable: "brew",
-    updateArgs: ["upgrade", definition.homebrewFormula],
+    updateArgs: [
+      "upgrade",
+      `--${definition.homebrewPackageType ?? "formula"}`,
+      definition.homebrewFormula,
+    ],
     updateLockKey: "homebrew",
   });
 }
@@ -453,6 +487,48 @@ const fetchNpmLatestVersion = Effect.fn("fetchNpmLatestVersion")(function* (pack
   return payload ? nonEmptyString(payload.version) : null;
 });
 
+const fetchHomebrewLatestVersion = Effect.fn("fetchHomebrewLatestVersion")(function* (source: {
+  readonly packageName: string;
+  readonly packageType: "formula" | "cask";
+}) {
+  // formulae.brew.sh only indexes Homebrew/core formulae and Homebrew/cask
+  // casks. Third-party tap formulae are intentionally treated as unknown
+  // instead of comparing them against a different release channel.
+  if (source.packageName.includes("/")) {
+    return null;
+  }
+
+  const client = yield* HttpClient.HttpClient;
+  const request = HttpClientRequest.get(
+    `https://formulae.brew.sh/api/${source.packageType}/${encodeURIComponent(source.packageName)}.json`,
+  ).pipe(HttpClientRequest.setHeader("accept", "application/json"));
+  const response = yield* client.execute(request).pipe(
+    Effect.timeoutOption(LATEST_VERSION_TIMEOUT_MS),
+    Effect.orElseSucceed(() => Option.none()),
+  );
+  if (Option.isNone(response)) {
+    return null;
+  }
+  const httpResponse = response.value;
+  if (httpResponse.status < 200 || httpResponse.status >= 300) {
+    return null;
+  }
+
+  if (source.packageType === "cask") {
+    const payload = yield* httpResponse.json.pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(HomebrewCaskLatestVersionResponse)),
+      Effect.orElseSucceed(() => null),
+    );
+    return payload ? nonEmptyString(payload.version) : null;
+  }
+
+  const payload = yield* httpResponse.json.pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(HomebrewFormulaLatestVersionResponse)),
+    Effect.orElseSucceed(() => null),
+  );
+  return payload ? nonEmptyString(payload.versions?.stable) : null;
+});
+
 export const resolveLatestProviderVersion = Effect.fn("resolveLatestProviderVersion")(function* (
   maintenanceCapabilities: ProviderMaintenanceCapabilities,
 ) {
@@ -461,15 +537,25 @@ export const resolveLatestProviderVersion = Effect.fn("resolveLatestProviderVers
     return null;
   }
 
+  const source =
+    maintenanceCapabilities.latestVersionSource ??
+    ({ kind: "npm", packageName } satisfies ProviderLatestVersionSource);
+  const cacheKey =
+    source.kind === "npm"
+      ? source.packageName
+      : `homebrew:${source.packageType}:${source.packageName}`;
+
   const latestVersionCache = yield* ProviderVersionCache;
-  const cached = latestVersionCache.get(packageName);
+  const cached = latestVersionCache.get(cacheKey);
   const now = DateTime.toEpochMillis(yield* DateTime.now);
   if (cached && cached.expiresAt > now) {
     return cached.version;
   }
 
-  const version = yield* fetchNpmLatestVersion(packageName);
-  latestVersionCache.set(packageName, {
+  const version = yield* source.kind === "npm"
+    ? fetchNpmLatestVersion(source.packageName)
+    : fetchHomebrewLatestVersion(source);
+  latestVersionCache.set(cacheKey, {
     expiresAt: now + LATEST_VERSION_CACHE_TTL_MS,
     version,
   });
