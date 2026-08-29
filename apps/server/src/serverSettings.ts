@@ -277,7 +277,7 @@ function restoreUsedProviders(
       ...settings.providers,
       cursor: {
         ...settings.providers.cursor,
-        enabled: persisted.providers?.cursor?.enabled ?? usedProviders.has("cursor"),
+        enabled: persisted.providers?.cursor?.enabled ?? true,
       },
       grok: {
         ...settings.providers.grok,
@@ -285,7 +285,7 @@ function restoreUsedProviders(
       },
       opencode: {
         ...settings.providers.opencode,
-        enabled: persisted.providers?.opencode?.enabled ?? usedProviders.has("opencode"),
+        enabled: persisted.providers?.opencode?.enabled ?? true,
       },
     },
     providerInstances,
