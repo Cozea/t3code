@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import type {
+  DevAppPreviewAutomationStatus,
   DevServerAutomationStatus,
   PreviewAutomationOperation,
   PreviewAutomationOpenInput,
@@ -73,6 +74,10 @@ const handlers = {
     invokeTargeted<DevServerAutomationStatus>("devServerStatus", input ?? {}),
   dev_server_ensure: (input) => invokeTargeted<DevServerAutomationStatus>("devServerEnsure", input),
   dev_server_attach: (input) => invokeTargeted<DevServerAutomationStatus>("devServerAttach", input),
+  devapp_preview_ensure: (input) =>
+    invokeTargeted<DevAppPreviewAutomationStatus>("devAppPreviewEnsure", input),
+  devapp_preview_attach: (input) =>
+    invokeTargeted<DevAppPreviewAutomationStatus>("devAppPreviewAttach", input),
   preview_status: (input) => invokeTargeted<PreviewAutomationStatus>("status", input ?? {}),
   preview_open: (input) =>
     invokeTargeted<PreviewAutomationStatus>("open", normalizePreviewOpenInput(input)),

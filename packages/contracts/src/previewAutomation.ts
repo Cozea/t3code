@@ -46,6 +46,8 @@ export const PREVIEW_AUTOMATION_OPERATIONS = [
   "devServerStatus",
   "devServerEnsure",
   "devServerAttach",
+  "devAppPreviewEnsure",
+  "devAppPreviewAttach",
 ] as const;
 
 export const PreviewAutomationOperation = Schema.Literals(PREVIEW_AUTOMATION_OPERATIONS);
@@ -161,6 +163,108 @@ export const DevServerAutomationStatus = Schema.Struct({
   surface: PreviewAutomationStatus,
 });
 export type DevServerAutomationStatus = typeof DevServerAutomationStatus.Type;
+
+const DevAppPreviewRelativePath = Schema.String.annotate({
+  description:
+    "Folder containing cozea-devapp.json, relative to the current project. Use . for the project root.",
+});
+
+function validateDevAppPreviewRelativePath(value: string): true | string {
+  if (value.trim() !== value || value.length === 0 || value.length > 1024) {
+    return "DevApp preview paths must be non-empty, trimmed, and at most 1024 characters.";
+  }
+  if (value.startsWith("/") || value.startsWith("\\") || /^[a-zA-Z]:/.test(value)) {
+    return "DevApp preview paths must be relative to the current project.";
+  }
+  let depth = 0;
+  for (const segment of value.split(/[/\\]/)) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      depth -= 1;
+      if (depth < 0) return "DevApp preview paths cannot leave the current project.";
+    } else {
+      depth += 1;
+    }
+  }
+  return true;
+}
+
+export const DevAppPreviewEnsureInput = Schema.Struct({
+  ...PreviewAutomationTabTargetFields,
+  relativePath: DevAppPreviewRelativePath,
+  open: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "Reveal the development preview to the user. Newly created previews remain beside the requesting agent as inactive tabs by default.",
+    }),
+  ),
+})
+  .check(Schema.makeFilter((input) => validateDevAppPreviewRelativePath(input.relativePath)))
+  .annotate({
+    description:
+      "Opens or reuses a development DevApp package inside the current project without granting its requested capabilities.",
+  });
+export type DevAppPreviewEnsureInput = typeof DevAppPreviewEnsureInput.Type;
+
+export const DevAppPreviewAttachInput = Schema.Struct({
+  ...PreviewAutomationTabTargetFields,
+  relativePath: Schema.optional(DevAppPreviewRelativePath).annotate({
+    description:
+      "Existing development package to attach, relative to the current project. Omit when tabId identifies the preview surface.",
+  }),
+  open: Schema.optional(
+    Schema.Boolean.annotate({
+      description: "Reveal the attached development preview to the user. Defaults to false.",
+    }),
+  ),
+})
+  .check(
+    Schema.makeFilter((input) =>
+      input.tabId !== undefined || input.relativePath !== undefined
+        ? input.relativePath === undefined
+          ? true
+          : validateDevAppPreviewRelativePath(input.relativePath)
+        : "Provide tabId or relativePath for the existing development preview.",
+    ),
+  )
+  .annotate({
+    description:
+      "Attaches to an existing development DevApp preview without creating a package session or granting capabilities.",
+  });
+export type DevAppPreviewAttachInput = typeof DevAppPreviewAttachInput.Type;
+
+export const DevAppPreviewAutomationDiagnostic = Schema.Struct({
+  code: Schema.String.check(Schema.isMaxLength(128)),
+  severity: Schema.Literals(["blocker", "warning"]),
+  message: Schema.String.check(Schema.isMaxLength(2048)),
+  detail: Schema.optional(Schema.String.check(Schema.isMaxLength(2048))),
+  fix: Schema.optional(Schema.String.check(Schema.isMaxLength(2048))),
+});
+export type DevAppPreviewAutomationDiagnostic = typeof DevAppPreviewAutomationDiagnostic.Type;
+
+export const DevAppPreviewAutomationWorker = Schema.Struct({
+  status: Schema.Literals(["starting", "ready", "stopped", "crashed"]),
+  restarts: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  lastError: Schema.NullOr(Schema.String.check(Schema.isMaxLength(2048))),
+});
+export type DevAppPreviewAutomationWorker = typeof DevAppPreviewAutomationWorker.Type;
+
+export const DevAppPreviewAutomationStatus = Schema.Struct({
+  phase: Schema.Literals(["opening", "invalid", "needsApproval", "running"]),
+  relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(1024)),
+  sourceId: Schema.NullOr(Schema.String.check(Schema.isMaxLength(128))),
+  name: Schema.NullOr(Schema.String.check(Schema.isMaxLength(512))),
+  hotReload: Schema.Boolean,
+  ready: Schema.Boolean,
+  requestedCapabilities: Schema.Array(Schema.String.check(Schema.isMaxLength(128))).check(
+    Schema.isMaxLength(64),
+  ),
+  agentInvocable: Schema.Boolean,
+  diagnostics: Schema.Array(DevAppPreviewAutomationDiagnostic).check(Schema.isMaxLength(64)),
+  worker: Schema.NullOr(DevAppPreviewAutomationWorker),
+  surface: PreviewAutomationStatus,
+});
+export type DevAppPreviewAutomationStatus = typeof DevAppPreviewAutomationStatus.Type;
 
 export const PreviewAutomationOpenInput = Schema.Struct({
   ...PreviewAutomationTabTargetFields,

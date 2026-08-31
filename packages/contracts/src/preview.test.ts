@@ -12,6 +12,9 @@ import {
   PreviewViewportSetting,
 } from "./preview.ts";
 import {
+  DevAppPreviewAttachInput,
+  DevAppPreviewAutomationStatus,
+  DevAppPreviewEnsureInput,
   PreviewAutomationHost,
   PreviewAutomationError,
   PreviewAutomationOpenInput,
@@ -32,6 +35,9 @@ const decodeResizeResult = Schema.decodeUnknownSync(PreviewAutomationResizeResul
 const decodeAutomationHost = Schema.decodeUnknownSync(PreviewAutomationHost);
 const decodeAutomationError = Schema.decodeUnknownSync(PreviewAutomationError);
 const decodeAutomationStatus = Schema.decodeUnknownSync(PreviewAutomationStatus);
+const decodeDevAppPreviewEnsureInput = Schema.decodeUnknownSync(DevAppPreviewEnsureInput);
+const decodeDevAppPreviewAttachInput = Schema.decodeUnknownSync(DevAppPreviewAttachInput);
+const decodeDevAppPreviewStatus = Schema.decodeUnknownSync(DevAppPreviewAutomationStatus);
 
 describe("PreviewAutomationOpenInput", () => {
   it("accepts the inline preview visibility flag", () => {
@@ -40,6 +46,52 @@ describe("PreviewAutomationOpenInput", () => {
 
   it("retains the legacy show visibility alias", () => {
     expect(decodeOpenInput({ show: false })).toEqual({ show: false });
+  });
+});
+
+describe("DevApp preview automation", () => {
+  it("accepts project-relative packages and rejects path escape", () => {
+    expect(decodeDevAppPreviewEnsureInput({ relativePath: "." })).toEqual({ relativePath: "." });
+    expect(decodeDevAppPreviewEnsureInput({ relativePath: "apps/inventory", open: false })).toEqual(
+      { relativePath: "apps/inventory", open: false },
+    );
+    expect(() => decodeDevAppPreviewEnsureInput({ relativePath: "/tmp/app" })).toThrow();
+    expect(() => decodeDevAppPreviewEnsureInput({ relativePath: "../../outside" })).toThrow();
+  });
+
+  it("requires an existing preview target for attach", () => {
+    expect(decodeDevAppPreviewAttachInput({ tabId: "preview-devapp" })).toEqual({
+      tabId: "preview-devapp",
+    });
+    expect(decodeDevAppPreviewAttachInput({ relativePath: "apps/inventory" })).toEqual({
+      relativePath: "apps/inventory",
+    });
+    expect(() => decodeDevAppPreviewAttachInput({})).toThrow();
+  });
+
+  it("reports approval and surface readiness independently", () => {
+    const decoded = decodeDevAppPreviewStatus({
+      phase: "needsApproval",
+      relativePath: "apps/inventory",
+      sourceId: "8a9f6d2f624cb5e73e4b6f5a67d21dc9",
+      name: "Inventory",
+      hotReload: true,
+      ready: false,
+      requestedCapabilities: ["project.metadata"],
+      agentInvocable: false,
+      diagnostics: [],
+      worker: null,
+      surface: {
+        available: false,
+        visible: false,
+        tabId: null,
+        url: null,
+        title: "Inventory",
+        loading: false,
+      },
+    });
+    expect(decoded.phase).toBe("needsApproval");
+    expect(decoded.surface.available).toBe(false);
   });
 });
 
