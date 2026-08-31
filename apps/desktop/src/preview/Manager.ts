@@ -3074,6 +3074,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         title: string;
         loading: boolean;
         visibleText: string;
+        viewportWidth: number;
+        viewportHeight: number;
         interactiveElements: PreviewAutomationSnapshot["interactiveElements"];
       }>(
         tabId,
@@ -3126,42 +3128,53 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             title: document.title,
             loading: document.readyState !== "complete",
             visibleText: (document.body?.innerText || "").slice(0, ${MAX_VISIBLE_TEXT_LENGTH}),
+            viewportWidth: Math.max(1, Math.round(window.innerWidth)),
+            viewportHeight: Math.max(1, Math.round(window.innerHeight)),
             interactiveElements: elements
           };
         })()`,
         true,
       );
-      const [accessibility, sourceImage, diagnostics, timelines] = yield* Effect.all([
+      const screenshotScale = Math.min(1, MAX_SCREENSHOT_WIDTH / page.viewportWidth);
+      const [accessibility, screenshotResponse, diagnostics, timelines] = yield* Effect.all([
         send("Accessibility.getFullAXTree"),
-        attemptPromise(
-          {
-            operation: "automationSnapshot.capturePage",
-            tabId,
-            webContentsId: wc.id,
+        send("Page.captureScreenshot", {
+          format: "png",
+          fromSurface: true,
+          captureBeyondViewport: false,
+          clip: {
+            x: 0,
+            y: 0,
+            width: page.viewportWidth,
+            height: page.viewportHeight,
+            scale: screenshotScale,
           },
-          () => wc.capturePage(),
-        ),
+        }),
         Ref.get(diagnosticsRef),
         Ref.get(actionTimelineRef),
       ]);
-      const sourceSize = sourceImage.getSize();
-      const image =
-        sourceSize.width > MAX_SCREENSHOT_WIDTH
-          ? sourceImage.resize({ width: MAX_SCREENSHOT_WIDTH })
-          : sourceImage;
-      const size = image.getSize();
+      const screenshotData = (screenshotResponse as { readonly data?: unknown } | null)?.data;
+      if (typeof screenshotData !== "string" || screenshotData.length === 0) {
+        return yield* new PreviewOperationError({
+          operation: "automationSnapshot.captureScreenshot",
+          tabId,
+          webContentsId: wc.id,
+          cause: new Error("Chromium returned an empty automation screenshot."),
+        });
+      }
+      const { viewportWidth, viewportHeight, ...snapshotPage } = page;
       const browserDiagnostics = diagnostics.get(wc.id);
       return {
-        ...page,
+        ...snapshotPage,
         accessibilityTree: accessibility,
         consoleEntries: [...(browserDiagnostics?.consoleEntries ?? [])],
         networkEntries: [...(browserDiagnostics?.networkEntries ?? [])],
         actionTimeline: [...(timelines.get(tabId) ?? [])],
         screenshot: {
           mimeType: "image/png" as const,
-          data: image.toPNG().toString("base64"),
-          width: size.width,
-          height: size.height,
+          data: screenshotData,
+          width: Math.max(1, Math.round(viewportWidth * screenshotScale)),
+          height: Math.max(1, Math.round(viewportHeight * screenshotScale)),
         },
       };
     },
