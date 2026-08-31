@@ -57,6 +57,14 @@ function collectChangedFiles(
   pushChangedFile(target, seen, record.filename);
   pushChangedFile(target, seen, record.newPath);
   pushChangedFile(target, seen, record.oldPath);
+  // Snake_case spellings used by Claude Code's Read/Edit/Write/NotebookEdit
+  // tools. Without these the path is dropped here and survives only inside the
+  // truncated detail string, so clients cannot name the file reliably.
+  pushChangedFile(target, seen, record.file_path);
+  pushChangedFile(target, seen, record.notebook_path);
+  pushChangedFile(target, seen, record.target_file);
+  pushChangedFile(target, seen, record.new_path);
+  pushChangedFile(target, seen, record.old_path);
 
   for (const nestedKey of [
     "item",
