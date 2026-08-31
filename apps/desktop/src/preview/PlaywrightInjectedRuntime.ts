@@ -1,45 +1,17 @@
-// @effect-diagnostics nodeBuiltinImport:off - Extracts Playwright's installed Node bundle for browser injection.
-import * as NodeFSP from "node:fs/promises";
-import * as NodeModule from "node:module";
-import * as NodePath from "node:path";
 import * as NodeVM from "node:vm";
 
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import playwrightCoreBundle from "../../node_modules/playwright-core/lib/coreBundle.js?raw";
 
-const require = NodeModule.createRequire(import.meta.url);
 const encodeUnknownJson = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
-const PLAYWRIGHT_PACKAGE_SPECIFIER = "playwright-core/package.json";
+const PLAYWRIGHT_BUNDLE_PATH = "playwright-core/lib/coreBundle.js";
 const PLAYWRIGHT_SOURCE_MARKER = "source3 = ";
 const PLAYWRIGHT_SOURCE_TERMINATOR = ";\n  }\n});";
 const PLAYWRIGHT_SOURCE_MINIMUM_LENGTH = 100_000;
 const PLAYWRIGHT_SOURCE_EVALUATION_TIMEOUT_MS = 1_000;
 const PLAYWRIGHT_SDK_LANGUAGE = "javascript";
 const PLAYWRIGHT_BROWSER_NAME = "chromium";
-
-export class PlaywrightPackageResolveError extends Schema.TaggedErrorClass<PlaywrightPackageResolveError>()(
-  "PlaywrightPackageResolveError",
-  {
-    specifier: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Failed to resolve Playwright package: ${this.specifier}`;
-  }
-}
-
-export class PlaywrightCoreBundleReadError extends Schema.TaggedErrorClass<PlaywrightCoreBundleReadError>()(
-  "PlaywrightCoreBundleReadError",
-  {
-    bundlePath: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Failed to read Playwright core bundle: ${this.bundlePath}`;
-  }
-}
 
 export class PlaywrightSourceMarkerNotFoundError extends Schema.TaggedErrorClass<PlaywrightSourceMarkerNotFoundError>()(
   "PlaywrightSourceMarkerNotFoundError",
@@ -110,8 +82,6 @@ export class PlaywrightOptionsEncodeError extends Schema.TaggedErrorClass<Playwr
 }
 
 export const PlaywrightInjectedRuntimeError = Schema.Union([
-  PlaywrightPackageResolveError,
-  PlaywrightCoreBundleReadError,
   PlaywrightSourceMarkerNotFoundError,
   PlaywrightSourceTerminatorNotFoundError,
   PlaywrightSourceEvaluationError,
@@ -164,20 +134,10 @@ export const extractPlaywrightInjectedRuntimeSource = Effect.fn(
 
 export const playwrightInjectedRuntimeSource = Effect.fn("PlaywrightInjectedRuntime.source")(
   function* () {
-    const packageJsonPath = yield* Effect.try({
-      try: () => require.resolve(PLAYWRIGHT_PACKAGE_SPECIFIER),
-      catch: (cause) =>
-        new PlaywrightPackageResolveError({
-          specifier: PLAYWRIGHT_PACKAGE_SPECIFIER,
-          cause,
-        }),
-    });
-    const bundlePath = NodePath.join(NodePath.dirname(packageJsonPath), "lib/coreBundle.js");
-    const coreBundle = yield* Effect.tryPromise({
-      try: () => NodeFSP.readFile(bundlePath, "utf8"),
-      catch: (cause) => new PlaywrightCoreBundleReadError({ bundlePath, cause }),
-    });
-    return yield* extractPlaywrightInjectedRuntimeSource(coreBundle, bundlePath);
+    return yield* extractPlaywrightInjectedRuntimeSource(
+      playwrightCoreBundle,
+      PLAYWRIGHT_BUNDLE_PATH,
+    );
   },
 );
 
