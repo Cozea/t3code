@@ -221,6 +221,42 @@ describe("PreviewAutomationStatus", () => {
       }).viewport,
     ).toEqual({ width: 412, height: 915 });
   });
+
+  it("preserves a bounded eligible-surface inventory from multi-surface desktop hosts", () => {
+    const decoded = decodeAutomationStatus({
+      available: true,
+      visible: true,
+      tabId: "preview-t",
+      url: "https://example.com",
+      title: "Example",
+      loading: false,
+      surfaces: [
+        {
+          tabId: "preview-t",
+          kind: "browser",
+          title: "Browser",
+          url: "https://example.com",
+          active: true,
+          controller: "human",
+        },
+        {
+          tabId: "preview-dev-server",
+          kind: "devServer",
+          title: "Dev Server",
+          url: "http://127.0.0.1:5173",
+          active: false,
+          controller: "agent",
+        },
+      ],
+    });
+
+    expect(decoded.surfaces).toHaveLength(2);
+    expect(decoded.surfaces?.[1]).toMatchObject({
+      tabId: "preview-dev-server",
+      kind: "devServer",
+      controller: "agent",
+    });
+  });
 });
 
 describe("PreviewEvent", () => {

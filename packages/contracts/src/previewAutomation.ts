@@ -66,6 +66,28 @@ const PreviewAutomationTabTargetFields = {
 export const PreviewAutomationTabTargetInput = Schema.Struct(PreviewAutomationTabTargetFields);
 export type PreviewAutomationTabTargetInput = typeof PreviewAutomationTabTargetInput.Type;
 
+export const PreviewAutomationSurfaceKind = Schema.Literals([
+  "browser",
+  "devServer",
+  "projectDevApp",
+  "orgDevApp",
+  "devAppPreview",
+]);
+export type PreviewAutomationSurfaceKind = typeof PreviewAutomationSurfaceKind.Type;
+
+export const PreviewAutomationSurfaceController = Schema.Literals(["human", "agent", "none"]);
+export type PreviewAutomationSurfaceController = typeof PreviewAutomationSurfaceController.Type;
+
+export const PreviewAutomationSurfaceSummary = Schema.Struct({
+  tabId: PreviewTabId,
+  kind: PreviewAutomationSurfaceKind,
+  title: Schema.String.check(Schema.isMaxLength(512)),
+  url: Schema.NullOr(Schema.String),
+  active: Schema.Boolean,
+  controller: PreviewAutomationSurfaceController,
+});
+export type PreviewAutomationSurfaceSummary = typeof PreviewAutomationSurfaceSummary.Type;
+
 export const PreviewAutomationStatus = Schema.Struct({
   available: Schema.Boolean,
   visible: Schema.Boolean,
@@ -77,6 +99,16 @@ export const PreviewAutomationStatus = Schema.Struct({
   viewportSetting: Schema.optional(PreviewViewportSetting),
   /** Measured guest-page viewport in CSS pixels when a webview is ready. */
   viewport: Schema.optional(PreviewRenderedViewportSize),
+  /**
+   * Browser-backed surfaces eligible for the invoking agent. Optional so
+   * upstream and older desktop hosts continue to decode status responses.
+   */
+  surfaces: Schema.optional(
+    Schema.Array(PreviewAutomationSurfaceSummary).check(Schema.isMaxLength(64)),
+  ).annotate({
+    description:
+      "Browser-backed surfaces eligible for this agent, with exact tab IDs for subsequent targeted operations.",
+  }),
 });
 export type PreviewAutomationStatus = typeof PreviewAutomationStatus.Type;
 
