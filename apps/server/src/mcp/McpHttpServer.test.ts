@@ -229,6 +229,31 @@ it.effect("registers annotated tools and preserves authenticated request context
       expect(navigateTool?.tool.annotations?.destructiveHint).toBe(false);
       expect(navigateTool?.tool.annotations?.openWorldHint).toBe(true);
 
+      const authoringDocsTool = server.tools.find(
+        ({ tool }) => tool.name === "devapp_authoring_docs",
+      );
+      expect(authoringDocsTool?.tool.annotations?.readOnlyHint).toBe(true);
+      expect(authoringDocsTool?.tool.annotations?.idempotentHint).toBe(true);
+      expect(authoringDocsTool?.tool.annotations?.destructiveHint).toBe(false);
+
+      const devAppCatalogTool = server.tools.find(
+        ({ tool }) => tool.name === "devapp_tool_catalog",
+      );
+      expect(devAppCatalogTool?.tool.annotations?.readOnlyHint).toBe(true);
+      expect(devAppCatalogTool?.tool.annotations?.destructiveHint).toBe(false);
+
+      const authoringDocs = yield* server
+        .callTool({ name: "devapp_authoring_docs", arguments: {} })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      expect(authoringDocs.isError).toBe(false);
+      expect(authoringDocs.structuredContent).toMatchObject({
+        schemaPath: "packages/devapp-api/schema/cozea-devapp.schema.json",
+        documentationPath: "docs/devapp-authoring.md",
+      });
+
       const status = yield* server
         .callTool({ name: "preview_status", arguments: {} })
         .pipe(

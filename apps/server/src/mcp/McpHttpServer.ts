@@ -14,10 +14,12 @@ import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 import {
+  DevAppAuthoringDocsToolkitHandlersLive,
   PreviewSnapshotToolkitHandlersLive,
   PreviewStandardToolkitHandlersLive,
 } from "./toolkits/preview/handlers.ts";
 import {
+  DevAppAuthoringDocsToolkit,
   PreviewSnapshotTool,
   PreviewSnapshotToolkit,
   PreviewStandardToolkit,
@@ -207,11 +209,16 @@ const PreviewStandardToolkitRegistrationLive = McpServer.toolkit(PreviewStandard
   Layer.provide(PreviewStandardToolkitHandlersLive),
 );
 
+const DevAppAuthoringDocsToolkitRegistrationLive = McpServer.toolkit(
+  DevAppAuthoringDocsToolkit,
+).pipe(Layer.provide(DevAppAuthoringDocsToolkitHandlersLive));
+
 const PreviewSnapshotRegistrationLive = Layer.effectDiscard(registerPreviewSnapshot()).pipe(
   Layer.provide(PreviewSnapshotToolkitHandlersLive),
 );
 
 export const PreviewToolkitRegistrationLive = Layer.mergeAll(
+  DevAppAuthoringDocsToolkitRegistrationLive,
   PreviewStandardToolkitRegistrationLive,
   PreviewSnapshotRegistrationLive,
 );

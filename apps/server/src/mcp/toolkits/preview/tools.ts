@@ -38,6 +38,10 @@ const PreviewActionResult = Schema.Record(Schema.String, Schema.Never).annotate(
   description: "The preview action completed successfully.",
 });
 
+const NoInput = Schema.Record(Schema.String, Schema.Never).annotate({
+  description: "No parameters are required.",
+});
+
 const browserTool = <T extends Tool.Any>(tool: T): T =>
   tool.annotate(Tool.OpenWorld, true).annotate(Tool.Destructive, true) as T;
 
@@ -102,7 +106,7 @@ export const DevServerAttachTool = safeBrowserTool(
 export const DevAppPreviewEnsureTool = browserTool(
   Tool.make("devapp_preview_ensure", {
     description:
-      "Open or reuse an unpublished DevApp package inside the current project, then report its validation, approval, worker, and living preview-surface state. Pass the folder containing cozea-devapp.json relative to the project. This never grants capabilities: when approval is required, ask the user to review the visible tile and call this tool again after approval.",
+      "Open or reuse an unpublished DevApp package inside the current project, then report its validation, approval, worker, declared agent operations, and living preview-surface state. Pass the folder containing cozea-devapp.json relative to the project. This never grants capabilities: when approval is required, ask the user to review the visible tile and call this tool again after approval. Declared worker operations remain non-invocable until Cozea's contained runtime is available.",
     parameters: DevAppPreviewEnsureInput,
     success: DevAppPreviewAutomationStatus,
     failure: PreviewAutomationError,
@@ -123,6 +127,17 @@ export const DevAppPreviewAttachTool = safeBrowserTool(
   })
     .annotate(Tool.Title, "Attach DevApp development preview")
     .annotate(Tool.Idempotent, true),
+);
+
+export const DevAppToolCatalogTool = readonlyBrowserTool(
+  Tool.make("devapp_tool_catalog", {
+    description:
+      "List the concrete worker operations declared by an existing development DevApp preview, including each name, description, and input schema. This does not start code, grant capabilities, or invoke an operation. toolInvocationAvailable remains false until Cozea's contained runtime ships.",
+    parameters: DevAppPreviewAttachInput,
+    success: DevAppPreviewAutomationStatus,
+    failure: PreviewAutomationError,
+    dependencies,
+  }).annotate(Tool.Title, "List declared DevApp tools"),
 );
 
 export const PreviewOpenTool = browserTool(
@@ -274,12 +289,36 @@ export const PreviewRecordingStopTool = safeBrowserTool(
   }).annotate(Tool.Title, "Stop browser recording"),
 );
 
+export const DEV_APP_AUTHORING_MCP_DOCS = {
+  markdown:
+    "Native DevApps are normal Cozea projects containing cozea-devapp.json. Use Create native DevApp beside project creation or on the DevApps browsing page; choose a view, worker, or combined starter. Open existing DevApp validates the manifest through ordinary folder import. The generated schema is packages/devapp-api/schema/cozea-devapp.schema.json and the typed view client is @cozea/devapp-api. Workers declare concrete tools with name, description, and a bounded object inputSchema; the development preview reports those declarations through the authenticated MCP session. Invocation remains unavailable until the contained Phase 8 runtime ships. For integration testing, launch local development DevApps from another project's Add Tile UI; they remain device-local and never appear in the Store. Programmatic publishing uses publishNativeDevAppProgrammatically and requires an authenticated project plus a logo for the first release. Development workers are trusted local developer code with explicit capability approval. Published or external worker execution remains disabled until the isolated Phase 8 runtime ships.",
+  schemaPath: "packages/devapp-api/schema/cozea-devapp.schema.json",
+  documentationPath: "docs/devapp-authoring.md",
+} as const;
+
+export const DevAppAuthoringDocsTool = Tool.make("devapp_authoring_docs", {
+  description:
+    "Read the native Cozea DevApp authoring contract: project scaffolding, manifest schema, typed view/worker client, cross-project development testing, programmatic publishing, and execution boundaries.",
+  parameters: NoInput,
+  success: Schema.Struct({
+    markdown: Schema.String,
+    schemaPath: Schema.String,
+    documentationPath: Schema.String,
+  }),
+  dependencies: [],
+})
+  .annotate(Tool.Title, "Read DevApp authoring docs")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true);
+
 export const PreviewToolkit = Toolkit.make(
   DevServerStatusTool,
   DevServerEnsureTool,
   DevServerAttachTool,
   DevAppPreviewEnsureTool,
   DevAppPreviewAttachTool,
+  DevAppToolCatalogTool,
   PreviewStatusTool,
   PreviewOpenTool,
   PreviewNavigateTool,
@@ -302,6 +341,7 @@ export const PreviewStandardToolkit = Toolkit.make(
   DevServerAttachTool,
   DevAppPreviewEnsureTool,
   DevAppPreviewAttachTool,
+  DevAppToolCatalogTool,
   PreviewStatusTool,
   PreviewOpenTool,
   PreviewNavigateTool,
@@ -318,3 +358,4 @@ export const PreviewStandardToolkit = Toolkit.make(
 );
 
 export const PreviewSnapshotToolkit = Toolkit.make(PreviewSnapshotTool);
+export const DevAppAuthoringDocsToolkit = Toolkit.make(DevAppAuthoringDocsTool);

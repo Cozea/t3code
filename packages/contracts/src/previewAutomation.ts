@@ -249,6 +249,13 @@ export const DevAppPreviewAutomationWorker = Schema.Struct({
 });
 export type DevAppPreviewAutomationWorker = typeof DevAppPreviewAutomationWorker.Type;
 
+export const DevAppPreviewDeclaredTool = Schema.Struct({
+  name: Schema.String.check(Schema.isMaxLength(64)),
+  description: Schema.String.check(Schema.isMaxLength(500)),
+  inputSchema: Schema.Unknown,
+});
+export type DevAppPreviewDeclaredTool = typeof DevAppPreviewDeclaredTool.Type;
+
 export const DevAppPreviewAutomationStatus = Schema.Struct({
   phase: Schema.Literals(["opening", "invalid", "needsApproval", "running"]),
   relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(1024)),
@@ -260,6 +267,9 @@ export const DevAppPreviewAutomationStatus = Schema.Struct({
     Schema.isMaxLength(64),
   ),
   agentInvocable: Schema.Boolean,
+  declaredTools: Schema.Array(DevAppPreviewDeclaredTool).check(Schema.isMaxLength(32)),
+  /** False until the contained Phase 8 runtime can execute autonomous worker tools. */
+  toolInvocationAvailable: Schema.Boolean,
   diagnostics: Schema.Array(DevAppPreviewAutomationDiagnostic).check(Schema.isMaxLength(64)),
   worker: Schema.NullOr(DevAppPreviewAutomationWorker),
   surface: PreviewAutomationStatus,

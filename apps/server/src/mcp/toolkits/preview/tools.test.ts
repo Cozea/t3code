@@ -1,7 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import { Tool } from "effect/unstable/ai";
 
-import { PreviewToolkit } from "./tools.ts";
+import { DevAppAuthoringDocsToolkit, PreviewToolkit } from "./tools.ts";
 
 const schemaHasDescription = (schema: unknown): boolean => {
   if (!schema || typeof schema !== "object") return false;
@@ -81,4 +81,24 @@ it("exports eligible surface inventory in preview status results", () => {
   };
 
   expect(schema.properties?.surfaces).toBeDefined();
+});
+
+it("exposes declared DevApp operations through a read-only catalog tool", () => {
+  const tool = PreviewToolkit.tools.devapp_tool_catalog;
+  const resultSchema = Tool.getJsonSchemaFromSchema(tool.successSchema) as {
+    readonly properties?: Readonly<Record<string, unknown>>;
+  };
+  expect(tool.description).toContain("does not start code");
+  expect(resultSchema.properties?.declaredTools).toBeDefined();
+  expect(resultSchema.properties?.toolInvocationAvailable).toBeDefined();
+});
+
+it("exports DevApp authoring documentation as a separate parameterless tool", () => {
+  const tool = DevAppAuthoringDocsToolkit.tools.devapp_authoring_docs;
+  expect(Tool.getJsonSchema(tool)).toEqual({
+    type: "object",
+    additionalProperties: false,
+    description: "No parameters are required.",
+  });
+  expect(tool.description).toContain("native Cozea DevApp authoring contract");
 });

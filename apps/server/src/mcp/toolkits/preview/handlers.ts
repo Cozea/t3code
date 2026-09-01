@@ -15,7 +15,13 @@ import type {
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
-import { PreviewSnapshotToolkit, PreviewStandardToolkit, PreviewToolkit } from "./tools.ts";
+import {
+  DEV_APP_AUTHORING_MCP_DOCS,
+  DevAppAuthoringDocsToolkit,
+  PreviewSnapshotToolkit,
+  PreviewStandardToolkit,
+  PreviewToolkit,
+} from "./tools.ts";
 
 /**
  * Collapses the `show` alias onto `open` and defaults tab reuse.
@@ -78,6 +84,8 @@ const handlers = {
     invokeTargeted<DevAppPreviewAutomationStatus>("devAppPreviewEnsure", input),
   devapp_preview_attach: (input) =>
     invokeTargeted<DevAppPreviewAutomationStatus>("devAppPreviewAttach", input),
+  devapp_tool_catalog: (input) =>
+    invokeTargeted<DevAppPreviewAutomationStatus>("devAppPreviewAttach", input),
   preview_status: (input) => invokeTargeted<PreviewAutomationStatus>("status", input ?? {}),
   preview_open: (input) =>
     invokeTargeted<PreviewAutomationStatus>("open", normalizePreviewOpenInput(input)),
@@ -112,3 +120,7 @@ export const PreviewSnapshotToolkitHandlersLive = PreviewSnapshotToolkit.toLayer
 });
 
 export const PreviewToolkitHandlersLive = PreviewToolkit.toLayer(handlers);
+
+export const DevAppAuthoringDocsToolkitHandlersLive = DevAppAuthoringDocsToolkit.toLayer({
+  devapp_authoring_docs: () => Effect.succeed(DEV_APP_AUTHORING_MCP_DOCS),
+});
