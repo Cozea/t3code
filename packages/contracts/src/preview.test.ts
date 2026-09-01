@@ -79,6 +79,8 @@ describe("DevApp preview automation", () => {
       ready: false,
       requestedCapabilities: ["project.metadata"],
       agentInvocable: false,
+      declaredTools: [],
+      toolInvocationAvailable: false,
       diagnostics: [],
       worker: null,
       surface: {

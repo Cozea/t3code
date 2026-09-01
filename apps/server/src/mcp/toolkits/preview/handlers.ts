@@ -1,6 +1,8 @@
 import * as Effect from "effect/Effect";
 import type {
   DevAppPreviewAutomationStatus,
+  DevAppToolCatalogStatus,
+  DevAppToolInvocationResult,
   DevServerAutomationStatus,
   PreviewAutomationOperation,
   PreviewAutomationOpenInput,
@@ -85,7 +87,9 @@ const handlers = {
   devapp_preview_attach: (input) =>
     invokeTargeted<DevAppPreviewAutomationStatus>("devAppPreviewAttach", input),
   devapp_tool_catalog: (input) =>
-    invokeTargeted<DevAppPreviewAutomationStatus>("devAppPreviewAttach", input),
+    invokeTargeted<DevAppToolCatalogStatus>("devAppToolCatalog", input),
+  devapp_tool_invoke: (input) =>
+    invokeTargeted<DevAppToolInvocationResult>("devAppToolInvoke", input, input.timeoutMs),
   preview_status: (input) => invokeTargeted<PreviewAutomationStatus>("status", input ?? {}),
   preview_open: (input) =>
     invokeTargeted<PreviewAutomationStatus>("open", normalizePreviewOpenInput(input)),

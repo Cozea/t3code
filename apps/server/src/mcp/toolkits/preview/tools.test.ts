@@ -93,6 +93,17 @@ it("exposes declared DevApp operations through a read-only catalog tool", () => 
   expect(resultSchema.properties?.toolInvocationAvailable).toBeDefined();
 });
 
+it("exposes bounded DevApp invocation separately from catalog discovery", () => {
+  const tool = PreviewToolkit.tools.devapp_tool_invoke;
+  const parameters = Tool.getJsonSchema(tool) as {
+    readonly properties?: Readonly<Record<string, unknown>>;
+  };
+  expect(tool.description).toContain("cannot start code");
+  expect(parameters.properties?.name).toBeDefined();
+  expect(parameters.properties?.input).toBeDefined();
+  expect(parameters.properties?.timeoutMs).toBeDefined();
+});
+
 it("exports DevApp authoring documentation as a separate parameterless tool", () => {
   const tool = DevAppAuthoringDocsToolkit.tools.devapp_authoring_docs;
   expect(Tool.getJsonSchema(tool)).toEqual({

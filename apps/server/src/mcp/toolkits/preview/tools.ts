@@ -2,6 +2,10 @@ import {
   DevAppPreviewAttachInput,
   DevAppPreviewAutomationStatus,
   DevAppPreviewEnsureInput,
+  DevAppToolCatalogStatus,
+  DevAppToolInvocationResult,
+  DevAppToolInvokeInput,
+  DevAppToolTargetInput,
   DevServerAutomationInput,
   DevServerAutomationStatus,
   PreviewAutomationClickInput,
@@ -132,12 +136,23 @@ export const DevAppPreviewAttachTool = safeBrowserTool(
 export const DevAppToolCatalogTool = readonlyBrowserTool(
   Tool.make("devapp_tool_catalog", {
     description:
-      "List the concrete worker operations declared by an existing development DevApp preview, including each name, description, and input schema. This does not start code, grant capabilities, or invoke an operation. toolInvocationAvailable remains false until Cozea's contained runtime ships.",
-    parameters: DevAppPreviewAttachInput,
-    success: DevAppPreviewAutomationStatus,
+      "List the concrete worker operations declared by one existing development or published DevApp. Target a published DevApp by exact tabId; a development package may use tabId or project-relative path. This does not start code, approve capabilities, grant folders, or widen the DevApp.",
+    parameters: DevAppToolTargetInput,
+    success: DevAppToolCatalogStatus,
     failure: PreviewAutomationError,
     dependencies,
   }).annotate(Tool.Title, "List declared DevApp tools"),
+);
+
+export const DevAppToolInvokeTool = browserTool(
+  Tool.make("devapp_tool_invoke", {
+    description:
+      "Invoke one exact operation declared by an already-running DevApp worker. The user must already have approved autonomous agent invocation; this tool cannot start code, approve capabilities, grant folders, or bypass the DevApp's placement and workspace boundary. Use devapp_tool_catalog first and pass input matching the returned schema.",
+    parameters: DevAppToolInvokeInput,
+    success: DevAppToolInvocationResult,
+    failure: PreviewAutomationError,
+    dependencies,
+  }).annotate(Tool.Title, "Invoke DevApp tool"),
 );
 
 export const PreviewOpenTool = browserTool(
@@ -319,6 +334,7 @@ export const PreviewToolkit = Toolkit.make(
   DevAppPreviewEnsureTool,
   DevAppPreviewAttachTool,
   DevAppToolCatalogTool,
+  DevAppToolInvokeTool,
   PreviewStatusTool,
   PreviewOpenTool,
   PreviewNavigateTool,
@@ -342,6 +358,7 @@ export const PreviewStandardToolkit = Toolkit.make(
   DevAppPreviewEnsureTool,
   DevAppPreviewAttachTool,
   DevAppToolCatalogTool,
+  DevAppToolInvokeTool,
   PreviewStatusTool,
   PreviewOpenTool,
   PreviewNavigateTool,
