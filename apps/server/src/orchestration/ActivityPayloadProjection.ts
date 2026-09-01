@@ -531,6 +531,78 @@ function dropStaleContextWindowActivities(
   );
 }
 
+function accountUsageIdentity(activity: OrchestrationThreadActivity): string | null {
+  if (activity.kind !== "account.rate-limits.updated") {
+    return null;
+  }
+  const payload = asRecord(activity.payload);
+  const rateLimits = asRecord(payload?.rateLimits);
+  if (!rateLimits) {
+    return null;
+  }
+  const provider = asTrimmedString(payload?.provider) ?? "unknown";
+  const claudeInfo = asRecord(rateLimits.rate_limit_info);
+  if (claudeInfo) {
+    return `${provider}:claude:${asTrimmedString(claudeInfo.rateLimitType) ?? "usage"}`;
+  }
+  return `${provider}:snapshot`;
+}
+
+/** Retain one account-wide snapshot per provider window instead of one row per request. */
+function dropStaleAccountUsageActivities(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<OrchestrationThreadActivity> {
+  const latestIndexByIdentity = new Map<string, number>();
+  const mergedActivityByIdentity = new Map<string, OrchestrationThreadActivity>();
+  for (let index = 0; index < activities.length; index += 1) {
+    const activity = activities[index]!;
+    const identity = accountUsageIdentity(activity);
+    if (!identity) continue;
+    latestIndexByIdentity.set(identity, index);
+    const previous = mergedActivityByIdentity.get(identity);
+    if (!previous) {
+      mergedActivityByIdentity.set(identity, activity);
+      continue;
+    }
+    mergedActivityByIdentity.set(identity, {
+      ...activity,
+      payload: mergeSparseAccountUsageRecords(
+        asRecord(previous.payload) ?? {},
+        asRecord(activity.payload) ?? {},
+      ),
+    });
+  }
+  if (latestIndexByIdentity.size === 0) {
+    return activities;
+  }
+  return activities
+    .filter((activity, index) => {
+      const identity = accountUsageIdentity(activity);
+      return identity === null || latestIndexByIdentity.get(identity) === index;
+    })
+    .map((activity) => {
+      const identity = accountUsageIdentity(activity);
+      return identity ? (mergedActivityByIdentity.get(identity) ?? activity) : activity;
+    });
+}
+
+function mergeSparseAccountUsageRecords(
+  previous: Record<string, unknown>,
+  next: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = { ...previous };
+  for (const [key, value] of Object.entries(next)) {
+    if (value === null || value === undefined) continue;
+    const previousRecord = asRecord(merged[key]);
+    const nextRecord = asRecord(value);
+    merged[key] =
+      previousRecord && nextRecord
+        ? mergeSparseAccountUsageRecords(previousRecord, nextRecord)
+        : value;
+  }
+  return merged;
+}
+
 /**
  * Identity used to retain only the newest lifecycle row for each call in a
  * thread snapshot. Prefer the runtime item id, then the legacy nested id, and
@@ -639,7 +711,9 @@ export function projectThreadDetailSnapshot(
     thread: {
       ...snapshot.thread,
       activities: dropSupersededToolUpdatedActivities(
-        dropStaleContextWindowActivities(snapshot.thread.activities),
+        dropStaleAccountUsageActivities(
+          dropStaleContextWindowActivities(snapshot.thread.activities),
+        ),
       ).map(projectActivityPayload),
     },
   };

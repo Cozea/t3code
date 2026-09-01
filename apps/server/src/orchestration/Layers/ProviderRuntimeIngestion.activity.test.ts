@@ -15,6 +15,38 @@ const base = {
   threadId: ThreadId.make("thread-1"),
 };
 
+describe("runtimeEventToActivities account usage", () => {
+  it("preserves provider rate-limit updates for the client usage meter", () => {
+    const event = {
+      ...base,
+      type: "account.rate-limits.updated",
+      eventId: EventId.make("evt-account-limits"),
+      payload: {
+        rateLimits: {
+          rateLimits: {
+            primary: { usedPercent: 36, windowDurationMins: 300, resetsAt: 1_788_227_200 },
+          },
+        },
+      },
+    } satisfies ProviderRuntimeEvent;
+
+    expect(runtimeEventToActivities(event)).toEqual([
+      {
+        id: "evt-account-limits",
+        createdAt: "2026-08-06T00:00:00.000Z",
+        tone: "info",
+        kind: "account.rate-limits.updated",
+        summary: "Rate limits updated",
+        payload: {
+          provider: "codex",
+          rateLimits: event.payload.rateLimits,
+        },
+        turnId: null,
+      },
+    ]);
+  });
+});
+
 describe("runtimeEventToActivities task progress", () => {
   it("persists usage independently from replaceable activity", () => {
     const taskId = RuntimeTaskId.make("agent-1");

@@ -92,6 +92,23 @@ describe("ServerProvider", () => {
     expect(parsed.continuation?.groupKey).toBe("codex:home:/Users/julius/.codex");
   });
 
+  it("preserves an account rate-limit snapshot for renderer usage reporting", () => {
+    const accountRateLimits = {
+      rateLimitsByLimitId: {
+        codex: {
+          primary: { usedPercent: 36, windowDurationMins: 300 },
+          secondary: { usedPercent: 71, windowDurationMins: 10_080 },
+        },
+      },
+    };
+    const parsed = decodeServerProvider({
+      ...baseProviderSnapshot,
+      accountRateLimits,
+    });
+
+    expect(parsed.accountRateLimits).toEqual(accountRateLimits);
+  });
+
   it("decodes optional legacy model metadata", () => {
     const parsed = decodeServerProvider({
       instanceId: "codex",

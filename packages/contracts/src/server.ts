@@ -178,6 +178,7 @@ export const ServerProvider = Schema.Struct({
   auth: ServerProviderAuth,
   checkedAt: IsoDateTime,
   message: Schema.optional(TrimmedNonEmptyString),
+  accountRateLimits: Schema.optional(Schema.Unknown),
   // Optional for back-compat: every legacy producer omits this field and
   // an absent value is interpreted as `"available"` by consumers (see
   // `isProviderAvailable`). New `ProviderInstanceRegistry` outputs set it

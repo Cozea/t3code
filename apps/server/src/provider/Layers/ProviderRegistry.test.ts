@@ -301,6 +301,12 @@ function makeCodexProbeSnapshot(
       },
     ],
     skills: [],
+    accountRateLimits: {
+      rateLimits: {
+        limitId: "codex",
+        primary: { usedPercent: 25, windowDurationMins: 300 },
+      },
+    },
     ...input,
   };
 }
@@ -365,6 +371,12 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           assert.strictEqual(status.auth.type, "chatgpt");
           assert.strictEqual(status.auth.label, "ChatGPT Pro 20x Subscription");
           assert.strictEqual(status.auth.email, "test@example.com");
+          assert.deepStrictEqual(status.accountRateLimits, {
+            rateLimits: {
+              limitId: "codex",
+              primary: { usedPercent: 25, windowDurationMins: 300 },
+            },
+          });
           assert.deepStrictEqual(status.models, [
             {
               slug: "gpt-live-codex",
