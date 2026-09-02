@@ -542,3 +542,59 @@ describe("context-window snapshot dedup", () => {
     expect(projected.thread.activities).toEqual([projectActivityPayload(fixtures[4]!)]);
   });
 });
+
+describe("account usage snapshot dedup", () => {
+  function makeAccountUsageActivity(
+    id: string,
+    provider: string,
+    rateLimits: Record<string, unknown>,
+  ): OrchestrationThreadActivity {
+    return {
+      id: EventId.make(id),
+      tone: "info",
+      kind: "account.rate-limits.updated",
+      summary: "Rate limits updated",
+      payload: { provider, rateLimits },
+      turnId: null,
+      createdAt: "2026-08-31T00:00:00.000Z",
+    };
+  }
+
+  it("merges sparse Codex snapshots while retaining distinct Claude windows", () => {
+    const codexStale = makeAccountUsageActivity("codex-old", "codex", {
+      rateLimits: {
+        primary: { usedPercent: 20, windowDurationMins: 300 },
+        secondary: { usedPercent: 60, windowDurationMins: 10_080 },
+      },
+    });
+    const claudeFiveHour = makeAccountUsageActivity("claude-five-hour", "claudeAgent", {
+      rate_limit_info: { rateLimitType: "five_hour", utilization: 0.3 },
+    });
+    const claudeWeek = makeAccountUsageActivity("claude-week", "claudeAgent", {
+      rate_limit_info: { rateLimitType: "seven_day", utilization: 0.6 },
+    });
+    const codexLatest = makeAccountUsageActivity("codex-new", "codex", {
+      rateLimits: { primary: { usedPercent: 25 } },
+    });
+
+    const projected = projectThreadDetailSnapshot({
+      snapshotSequence: 7,
+      thread: makeThread([codexStale, claudeFiveHour, claudeWeek, codexLatest]),
+    });
+
+    expect(projected.thread.activities.map((activity) => activity.id)).toEqual([
+      claudeFiveHour.id,
+      claudeWeek.id,
+      codexLatest.id,
+    ]);
+    expect(projected.thread.activities.at(-1)?.payload).toEqual({
+      provider: "codex",
+      rateLimits: {
+        rateLimits: {
+          primary: { usedPercent: 25, windowDurationMins: 300 },
+          secondary: { usedPercent: 60, windowDurationMins: 10_080 },
+        },
+      },
+    });
+  });
+});
