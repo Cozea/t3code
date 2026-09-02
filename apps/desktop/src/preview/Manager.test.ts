@@ -2894,6 +2894,83 @@ describe("PreviewManager", () => {
     ),
   );
 
+  effectIt.effect("captures automation screenshots through CDP for hidden webviews", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const capturePage = vi.fn(() => new Promise<never>(() => undefined));
+        const sendCommand = vi.fn(async (method: string) => {
+          if (method === "Runtime.evaluate") {
+            return {
+              result: {
+                value: {
+                  url: "cozea-devapp://source.dev/dist/index.html",
+                  title: "Development preview",
+                  loading: false,
+                  visibleText: "Preview ready",
+                  viewportWidth: 1600,
+                  viewportHeight: 900,
+                  interactiveElements: [],
+                },
+              },
+            };
+          }
+          if (method === "Accessibility.getFullAXTree") return { nodes: [] };
+          if (method === "Page.captureScreenshot") return { data: "cHJldmlldy1wbmc=" };
+          return undefined;
+        });
+        fromId.mockReturnValue({
+          id: 42,
+          isDestroyed: () => false,
+          getType: () => "webview",
+          getURL: () => "cozea-devapp://source.dev/dist/index.html",
+          getTitle: () => "Development preview",
+          isLoading: () => false,
+          isDevToolsOpened: () => false,
+          getZoomFactor: () => 1,
+          setZoomFactor: vi.fn(),
+          setAudioMuted: vi.fn(),
+          isCurrentlyAudible: () => false,
+          on: vi.fn(),
+          off: vi.fn(),
+          ipc: { on: vi.fn(), off: vi.fn() },
+          send: webviewSend,
+          navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+          setWindowOpenHandler: vi.fn(),
+          debugger: {
+            isAttached: () => false,
+            attach: vi.fn(),
+            sendCommand,
+            on: vi.fn(),
+            off: vi.fn(),
+          },
+          capturePage,
+        } as never);
+
+        yield* manager.createTab("tab_hidden_devapp");
+        yield* manager.registerWebview("tab_hidden_devapp", 42);
+        const snapshot = yield* manager.automationSnapshot("tab_hidden_devapp");
+
+        expect(snapshot).toMatchObject({
+          url: "cozea-devapp://source.dev/dist/index.html",
+          title: "Development preview",
+          visibleText: "Preview ready",
+          screenshot: {
+            data: "cHJldmlldy1wbmc=",
+            width: 1280,
+            height: 720,
+          },
+        });
+        expect(capturePage).not.toHaveBeenCalled();
+        expect(sendCommand).toHaveBeenCalledWith("Page.captureScreenshot", {
+          format: "png",
+          fromSurface: true,
+          captureBeyondViewport: false,
+          clip: { x: 0, y: 0, width: 1600, height: 900, scale: 0.8 },
+        });
+      }),
+    ),
+  );
+
   effectIt.effect("emits the resolved pointer target before dispatching an automation click", () =>
     withManager((manager) =>
       Effect.gen(function* () {

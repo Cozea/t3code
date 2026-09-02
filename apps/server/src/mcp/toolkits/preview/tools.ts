@@ -1,4 +1,7 @@
 import {
+  DevAppPreviewAttachInput,
+  DevAppPreviewAutomationStatus,
+  DevAppPreviewEnsureInput,
   DevServerAutomationInput,
   DevServerAutomationStatus,
   PreviewAutomationClickInput,
@@ -46,7 +49,7 @@ const readonlyBrowserTool = <T extends Tool.Any>(tool: T): T =>
 
 export const PreviewStatusTool = Tool.make("preview_status", {
   description:
-    "Report whether a collaborative browser tab is automation-capable, including its URL, title, visibility, loading state, viewport mode, and measured CSS-pixel size. Pass tabId to inspect a specific tab; omit it to use this agent session's current tab.",
+    "Report whether a collaborative browser tab is automation-capable, including its URL, title, visibility, loading state, viewport mode, measured CSS-pixel size, and every browser-backed surface eligible for this agent. Use a returned surface tabId for an exact subsequent target; omit tabId to use this agent session's current tab.",
   parameters: PreviewAutomationTabTargetInput,
   success: PreviewAutomationStatus,
   failure: PreviewAutomationError,
@@ -93,6 +96,32 @@ export const DevServerAttachTool = safeBrowserTool(
     dependencies,
   })
     .annotate(Tool.Title, "Attach Dev Server view")
+    .annotate(Tool.Idempotent, true),
+);
+
+export const DevAppPreviewEnsureTool = browserTool(
+  Tool.make("devapp_preview_ensure", {
+    description:
+      "Open or reuse an unpublished DevApp package inside the current project, then report its validation, approval, worker, and living preview-surface state. Pass the folder containing cozea-devapp.json relative to the project. This never grants capabilities: when approval is required, ask the user to review the visible tile and call this tool again after approval.",
+    parameters: DevAppPreviewEnsureInput,
+    success: DevAppPreviewAutomationStatus,
+    failure: PreviewAutomationError,
+    dependencies,
+  })
+    .annotate(Tool.Title, "Ensure DevApp development preview")
+    .annotate(Tool.Idempotent, true),
+);
+
+export const DevAppPreviewAttachTool = safeBrowserTool(
+  Tool.make("devapp_preview_attach", {
+    description:
+      "Attach to an existing unpublished DevApp preview by exact tabId or project-relative package folder. It never creates a package session, grants capabilities, or targets published DevApps. Use the returned surface tabId with preview_snapshot, preview_click, preview_type, and the other preview tools.",
+    parameters: DevAppPreviewAttachInput,
+    success: DevAppPreviewAutomationStatus,
+    failure: PreviewAutomationError,
+    dependencies,
+  })
+    .annotate(Tool.Title, "Attach DevApp development preview")
     .annotate(Tool.Idempotent, true),
 );
 
@@ -249,6 +278,8 @@ export const PreviewToolkit = Toolkit.make(
   DevServerStatusTool,
   DevServerEnsureTool,
   DevServerAttachTool,
+  DevAppPreviewEnsureTool,
+  DevAppPreviewAttachTool,
   PreviewStatusTool,
   PreviewOpenTool,
   PreviewNavigateTool,
@@ -269,6 +300,8 @@ export const PreviewStandardToolkit = Toolkit.make(
   DevServerStatusTool,
   DevServerEnsureTool,
   DevServerAttachTool,
+  DevAppPreviewEnsureTool,
+  DevAppPreviewAttachTool,
   PreviewStatusTool,
   PreviewOpenTool,
   PreviewNavigateTool,

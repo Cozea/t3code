@@ -72,3 +72,13 @@ it("exports exact object result schemas for preview actions", () => {
     });
   }
 });
+
+it("exports eligible surface inventory in preview status results", () => {
+  const schema = Tool.getJsonSchemaFromSchema(
+    PreviewToolkit.tools.preview_status.successSchema,
+  ) as {
+    readonly properties?: Readonly<Record<string, unknown>>;
+  };
+
+  expect(schema.properties?.surfaces).toBeDefined();
+});
