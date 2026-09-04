@@ -778,6 +778,38 @@ describe("isRecoverableThreadResumeError", () => {
 });
 
 describe("openCodexThread", () => {
+  it.effect("preserves the native thread when a payload failure mentions a missing thread", () =>
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      const failure = new CodexErrors.CodexAppServerRequestError({
+        code: -32603,
+        method: "thread/resume",
+        operation: "decode-payload",
+        errorMessage: "thread not found in the supported payload schema",
+      });
+      const client = {
+        request: <M extends "thread/start" | "thread/resume">(
+          method: M,
+          _payload: CodexRpc.ClientRequestParamsByMethod[M],
+        ) => {
+          calls.push(method);
+          return Effect.fail(failure);
+        },
+      };
+      const error = yield* openCodexThread({
+        client,
+        threadId: ThreadId.make("thread-1"),
+        runtimeMode: "full-access",
+        cwd: "/tmp/project",
+        requestedModel: undefined,
+        serviceTier: undefined,
+        resumeThreadId: "existing-thread",
+      }).pipe(Effect.flip);
+      NodeAssert.strictEqual(error, failure);
+      NodeAssert.deepStrictEqual(calls, ["thread/resume"]);
+    }),
+  );
+
   it.effect("falls back to thread/start when resume fails recoverably", () =>
     Effect.gen(function* () {
       const calls: Array<{ method: "thread/start" | "thread/resume"; payload: unknown }> = [];

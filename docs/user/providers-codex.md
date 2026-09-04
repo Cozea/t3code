@@ -151,3 +151,10 @@ Use a totally separate `CODEX_HOME path` only when you want a separate Codex wor
 
 That means separate sessions and less account switching inside old threads. Most dual-account users
 should use the shared-home plus shadow-home setup instead.
+
+## If a conversation needs a compatibility update
+
+A newer Codex CLI can save history that an older app cannot read. If the app
+reports an incompatible Codex response, update the app and retry the same
+conversation. This error does not automatically start a replacement conversation.
+Keep the original Codex history so the updated integration can resume it.

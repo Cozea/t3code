@@ -1493,6 +1493,47 @@ scopedLifecycleLayer("CodexAdapterLive scoped lifecycle", (it) => {
 });
 
 const scopedFailureRuntimeFactory = makeScopedRuntimeFactory({ failConstruction: true });
+const incompatibleHistoryError = new CodexErrors.CodexAppServerRequestError({
+  code: -32603,
+  method: "thread/resume",
+  operation: "decode-payload",
+  errorMessage: "Invalid history payload containing private conversation content",
+});
+const incompatibleHistoryLayer = it.layer(
+  Layer.effect(
+    CodexAdapter,
+    makeCodexAdapter(decodeCodexSettings({}), {
+      makeRuntime: () => Effect.fail(incompatibleHistoryError),
+    }),
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  ),
+);
+
+incompatibleHistoryLayer("CodexAdapterLive incompatible history", (it) => {
+  it.effect("reports an actionable compatibility error without exposing the history", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const error = yield* adapter
+        .startSession({
+          provider: ProviderDriverKind.make("codex"),
+          threadId: asThreadId("thread-incompatible"),
+          runtimeMode: "full-access",
+          resumeCursor: { threadId: "native-existing-thread" },
+        })
+        .pipe(Effect.flip);
+      NodeAssert.equal(error._tag, "ProviderAdapterProcessError");
+      NodeAssert.match(error.detail, /Update the app's Codex integration/);
+      NodeAssert.doesNotMatch(error.detail, /private conversation/);
+      NodeAssert.strictEqual(error.cause, incompatibleHistoryError);
+      NodeAssert.equal(yield* adapter.hasSession(asThreadId("thread-incompatible")), false);
+    }),
+  );
+});
+
 const scopedFailureLayer = it.layer(
   Layer.effect(
     CodexAdapter,

@@ -74,6 +74,7 @@ const CodexUserInputAnswerObject = Schema.Struct({
 });
 const isCodexResumeCursorSchema = Schema.is(CodexResumeCursorSchema);
 const isCodexUserInputAnswerObject = Schema.is(CodexUserInputAnswerObject);
+const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
 const NullableMcpElicitationString = Schema.NullOr(Schema.String);
 const McpElicitationMetadata = Schema.Struct({
   app: Schema.optionalKey(NullableMcpElicitationString),
@@ -662,6 +663,12 @@ function classifyCodexStderrLine(rawLine: string): { readonly message: string } 
 }
 
 export function isRecoverableThreadResumeError(error: unknown): boolean {
+  if (
+    isCodexAppServerRequestError(error) &&
+    (error.operation === "decode-payload" || error.operation === "encode-payload")
+  ) {
+    return false;
+  }
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
   if (!message.includes("thread")) {
     return false;

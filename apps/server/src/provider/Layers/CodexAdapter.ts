@@ -67,6 +67,7 @@ import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogg
 import { resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
+const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
 const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
   CodexSessionRuntimeThreadIdMissingError,
 );
@@ -96,6 +97,13 @@ interface CodexAdapterSessionContext {
   stopped: boolean;
 }
 
+function codexRuntimeErrorDetail(error: CodexSessionRuntimeError): string {
+  if (isCodexAppServerRequestError(error) && error.operation === "decode-payload") {
+    return "Codex returned a response this app version cannot read. Update the app's Codex integration, then retry this conversation.";
+  }
+  return error.message;
+}
+
 function mapCodexRuntimeError(
   threadId: ThreadId,
   method: string,
@@ -120,7 +128,7 @@ function mapCodexRuntimeError(
   return new ProviderAdapterRequestError({
     provider: PROVIDER,
     method,
-    detail: error.message,
+    detail: codexRuntimeErrorDetail(error),
     cause: error,
   });
 }
@@ -1727,7 +1735,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               new ProviderAdapterProcessError({
                 provider: PROVIDER,
                 threadId: input.threadId,
-                detail: cause.message,
+                detail: codexRuntimeErrorDetail(cause),
                 cause,
               }),
           ),
@@ -1760,7 +1768,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               new ProviderAdapterProcessError({
                 provider: PROVIDER,
                 threadId: input.threadId,
-                detail: cause.message,
+                detail: codexRuntimeErrorDetail(cause),
                 cause,
               }),
           ),
