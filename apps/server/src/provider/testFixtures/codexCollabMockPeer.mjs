@@ -57,8 +57,62 @@ rl.on("line", (line) => {
     });
     return;
   }
-  if (method === "thread/start" || method === "thread/resume") {
+  if (method === "thread/start") {
     write({ id, result: fixture.responses.threadStart });
+    return;
+  }
+  if (method === "thread/resume") {
+    if (script.recordRequests) {
+      NodeFS.appendFileSync(
+        `${process.env.T3_CODEX_COLLAB_SCRIPT}.requests`,
+        `${JSON.stringify({ method, params: message.params })}\n`,
+      );
+    }
+    const threadId = message.params?.threadId;
+    const childSnapshot = script.childResumeSnapshots?.[threadId];
+    if (script.resumeRequestMarker) {
+      write({
+        jsonrpc: "2.0",
+        method: "serverRequest/resolved",
+        params: {
+          threadId: script.rootThreadId,
+          requestId: script.resumeRequestMarker,
+        },
+      });
+    }
+    if (childSnapshot?.hang) {
+      return;
+    }
+    if (childSnapshot?.error) {
+      write({ id, error: { code: -32000, message: childSnapshot.error } });
+      return;
+    }
+    if (childSnapshot) {
+      write({
+        id,
+        result: {
+          ...fixture.responses.threadStart,
+          model: childSnapshot.model,
+          reasoningEffort: childSnapshot.reasoningEffort,
+          thread: {
+            ...fixture.responses.threadStart.thread,
+            id: threadId,
+            sessionId: threadId,
+          },
+        },
+      });
+      for (const notification of childSnapshot.notifications ?? []) {
+        write({ jsonrpc: "2.0", method: notification.method, params: notification.params });
+      }
+      return;
+    }
+    const savedThread = script.persistHistory
+      ? JSON.parse(NodeFS.readFileSync(`${process.env.T3_CODEX_COLLAB_SCRIPT}.history`, "utf8"))
+      : undefined;
+    write({
+      id,
+      result: { ...fixture.responses.threadStart, ...(savedThread ? { thread: savedThread } : {}) },
+    });
     return;
   }
   if (method === "turn/start") {
@@ -82,6 +136,30 @@ rl.on("line", (line) => {
     }
     for (const request of script.serverRequests ?? []) {
       write({ jsonrpc: "2.0", id: request.id, method: request.method, params: request.params });
+    }
+    if (script.persistHistory) {
+      NodeFS.writeFileSync(
+        `${process.env.T3_CODEX_COLLAB_SCRIPT}.history`,
+        JSON.stringify({
+          ...fixture.responses.threadStart.thread,
+          turns: [
+            {
+              ...turn,
+              status: "completed",
+              error: null,
+              items: [
+                {
+                  type: "subAgentActivity",
+                  id: "finished-child",
+                  agentThreadId: "saved-child",
+                  agentPath: "/root/docs",
+                  kind: "completed",
+                },
+              ],
+            },
+          ],
+        }),
+      );
     }
     if (script.holdTurnOpen !== true) {
       write({

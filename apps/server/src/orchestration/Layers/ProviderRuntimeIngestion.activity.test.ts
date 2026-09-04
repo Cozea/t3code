@@ -22,6 +22,17 @@ describe("runtimeEventToActivities account usage", () => {
       type: "account.rate-limits.updated",
       eventId: EventId.make("evt-account-limits"),
       payload: {
+        limits: {
+          windows: [
+            {
+              id: "primary",
+              kind: "session",
+              label: "Session",
+              usedPercent: 36,
+              windowDurationMins: 300,
+            },
+          ],
+        },
         rateLimits: {
           rateLimits: {
             primary: { usedPercent: 36, windowDurationMins: 300, resetsAt: 1_788_227_200 },
@@ -39,6 +50,7 @@ describe("runtimeEventToActivities account usage", () => {
         summary: "Rate limits updated",
         payload: {
           provider: "codex",
+          limits: event.payload.limits,
           rateLimits: event.payload.rateLimits,
         },
         turnId: null,
