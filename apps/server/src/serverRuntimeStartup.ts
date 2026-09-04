@@ -1,3 +1,5 @@
+import * as Fiber from "effect/Fiber";
+import { bindCozeaHostUpdateControl } from "./cozeaHostUpdateControl.ts";
 import {
   CommandId,
   DEFAULT_MODEL,
@@ -900,7 +902,7 @@ export const make = (options?: StartupOptions) =>
       ),
     );
 
-    return {
+    const service = {
       awaitCommandReady: commandGate.awaitCommandReady,
       markHttpListening: Deferred.succeed(httpListening, undefined),
       markRunningProviderSessionsForContinuation: markRunningProviderSessionsForContinuation.pipe(
@@ -922,6 +924,39 @@ export const make = (options?: StartupOptions) =>
         ),
       enqueueCommand: commandGate.enqueueCommand,
     } satisfies ServerRuntimeStartup["Service"];
+    if (process.env.COZEA_HOST_CONTINUATION === "1" && process.send) {
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          bindCozeaHostUpdateControl(
+            {
+              on: (event, listener) => process.on(event, listener),
+              off: (event, listener) => process.off(event, listener),
+              send: (message) => process.send?.(message as object),
+            },
+            {
+              prepare: () =>
+                Effect.runPromise(
+                  service.awaitCommandReady.pipe(
+                    Effect.andThen(service.markRunningProviderSessionsForContinuation),
+                  ),
+                ),
+              clear: (threadIds) =>
+                Effect.runPromise(service.clearProviderSessionContinuationMarkers(threadIds)),
+              scheduleExpiry: (expire) => {
+                const fiber = Effect.runFork(
+                  Effect.sleep("30 seconds").pipe(Effect.andThen(Effect.sync(expire))),
+                );
+                return () => {
+                  Effect.runFork(Fiber.interrupt(fiber));
+                };
+              },
+            },
+          ),
+        ),
+        (dispose) => Effect.sync(dispose),
+      );
+    }
+    return service;
   });
 
 export const layerWithOptions = (options?: StartupOptions) =>
