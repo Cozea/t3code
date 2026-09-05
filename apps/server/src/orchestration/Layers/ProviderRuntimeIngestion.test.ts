@@ -12,6 +12,7 @@ import {
 } from "@t3tools/contracts";
 import {
   ApprovalRequestId,
+  CheckpointRef,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
@@ -411,6 +412,49 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("turn failed");
   });
+
+  it.each(["interrupted", "cancelled", "failed"] as const)(
+    "preserves %s completion through later checkpoint updates",
+    async (state) => {
+      const harness = await createHarness();
+      const threadId = asThreadId("thread-1");
+      const turnId = asTurnId("terminal-turn");
+      const base = {
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        turnId,
+        createdAt: "2026-01-01T00:00:01.000Z",
+      };
+      harness.emit({ ...base, type: "turn.started", eventId: asEventId("terminal-start") });
+      harness.emit({
+        ...base,
+        type: "turn.completed",
+        eventId: asEventId("terminal-complete"),
+        createdAt: "2026-01-01T00:00:02.000Z",
+        payload: { state },
+      });
+      await harness.drain();
+      const expected = state === "failed" ? "error" : "interrupted";
+      const before = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+      expect(before?.latestTurn?.state).toBe(expected);
+      for (const [index, status] of (["missing", "ready"] as const).entries()) {
+        await harness.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.make(`terminal-checkpoint-${index}`),
+          threadId,
+          turnId,
+          checkpointRef: CheckpointRef.make(`refs/cozea/qa/checkpoint-${index}`),
+          status,
+          files: [],
+          checkpointTurnCount: 1,
+          completedAt: "2026-01-01T00:00:03.000Z",
+          createdAt: "2026-01-01T00:00:03.000Z",
+        });
+        const after = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+        expect(after?.latestTurn?.state).toBe(expected);
+      }
+    },
+  );
 
   it.each([
     { delivery: "buffered", enableLegacyTokenStreaming: false },
