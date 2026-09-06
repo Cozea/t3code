@@ -254,7 +254,10 @@ const toMcpResult = (result: BackendToolResult): McpSchema.CallToolResult => {
   });
   return new McpSchema.CallToolResult({
     isError: result.isError === true,
-    content: content.length > 0 ? content : [{ type: "text", text: "Computer Use returned no content." }],
+    content:
+      content.length > 0
+        ? content
+        : [{ type: "text", text: "Computer Use returned no content." }],
   });
 };
 
@@ -328,11 +331,6 @@ export const registerComputerUseTools = Effect.fn("McpHttpServer.registerCompute
               fiber.context,
               McpInvocationContext.McpInvocationContext,
             );
-            if (!invocation.capabilities.has("computerUse")) {
-              return Effect.succeed(
-                backendFailure("Computer Use is not authorized for this provider session."),
-              );
-            }
             return callComputerUseBackend(spec.name, payload, invocation).pipe(
               Effect.map(toMcpResult),
               Effect.catchAll((error) =>
@@ -344,7 +342,3 @@ export const registerComputerUseTools = Effect.fn("McpHttpServer.registerCompute
     }
   },
 );
-
-export const ComputerUseToolkitRegistrationLive = Effect.gen(function* () {
-  yield* registerComputerUseTools();
-}).pipe(Effect.scoped);
