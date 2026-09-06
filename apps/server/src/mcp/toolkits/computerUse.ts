@@ -17,6 +17,9 @@ const DISABLED_TOOLS = new Set(
     .map((value) => value.trim())
     .filter(Boolean),
 );
+// Track accepted provider turns, not Computer Use calls. Scheduled tasks that
+// are explicitly denied CU still need authoritative terminal policy cleanup.
+const ACTIVE_PROVIDER_TURN_THREADS = new Set<string>();
 
 const clickMethods = ["auto", "accessibility", "app_post", "sky_click", "global"] as const;
 
@@ -365,15 +368,21 @@ export const ComputerUseTurnLifecycleLive = Layer.effectDiscard(
           return Effect.void;
         }
         const { threadId, session } = event.payload;
-        if (!isComputerUseTurnTerminalSession(session)) {
+        const normalizedThreadId = String(threadId);
+        if (session.activeTurnId != null) {
+          ACTIVE_PROVIDER_TURN_THREADS.add(normalizedThreadId);
           return Effect.void;
         }
-        // Electron owns per-thread Computer Use policy and active native state.
-        // Forward every accepted canonical terminal session so scheduled threads
-        // that were explicitly denied (and therefore never called a CU tool) can
-        // release their policy from an authoritative lifecycle event. Electron
-        // ignores terminal notifications for threads it does not own.
-        return notifyComputerUseTurnEnded(String(threadId));
+        if (
+          !isComputerUseTurnTerminalSession(session) ||
+          !ACTIVE_PROVIDER_TURN_THREADS.delete(normalizedThreadId)
+        ) {
+          return Effect.void;
+        }
+        // Only terminal sessions that follow an observed active provider turn
+        // are forwarded. This excludes pre-turn ready states while still
+        // covering scheduled threads that never invoked a Computer Use tool.
+        return notifyComputerUseTurnEnded(normalizedThreadId);
       }),
     );
   }),
