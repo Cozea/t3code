@@ -1,7 +1,11 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 import { McpSchema, McpServer } from "effect/unstable/ai";
 
+import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
+import { forkParked } from "../../serverActivation.ts";
 import * as McpInvocationContext from "../McpInvocationContext.ts";
 
 const COMPUTER_USE_ENDPOINT = process.env.COZEA_COMPUTER_USE_ENDPOINT?.trim() ?? "";
@@ -13,6 +17,7 @@ const DISABLED_TOOLS = new Set(
     .map((value) => value.trim())
     .filter(Boolean),
 );
+const ACTIVE_COMPUTER_USE_THREADS = new Set<string>();
 
 const clickMethods = ["auto", "accessibility", "app_post", "sky_click", "global"] as const;
 
@@ -261,6 +266,16 @@ const toMcpResult = (result: BackendToolResult): McpSchema.CallToolResult => {
   });
 };
 
+export const isComputerUseTurnTerminalSession = (session: {
+  readonly status: string;
+  readonly activeTurnId: unknown;
+}): boolean =>
+  session.activeTurnId === null &&
+  (session.status === "ready" ||
+    session.status === "interrupted" ||
+    session.status === "error" ||
+    session.status === "stopped");
+
 const callComputerUseBackend = (
   tool: string,
   arguments_: unknown,
@@ -274,6 +289,7 @@ const callComputerUseBackend = (
       if (DISABLED_TOOLS.has(tool)) {
         throw new Error(`Computer Use capability '${tool}' is disabled in Cozea Settings.`);
       }
+      ACTIVE_COMPUTER_USE_THREADS.add(String(invocation.threadId));
       const response = await fetch(`${COMPUTER_USE_ENDPOINT.replace(/\/$/, "")}/v1/call`, {
         method: "POST",
         headers: {
@@ -308,6 +324,60 @@ const callComputerUseBackend = (
     },
     catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
   });
+
+const notifyComputerUseTurnEnded = (threadId: string) =>
+  Effect.tryPromise({
+    try: async () => {
+      const response = await fetch(
+        `${COMPUTER_USE_ENDPOINT.replace(/\/$/, "")}/v1/turn-ended`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${COMPUTER_USE_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ threadId }),
+          signal: AbortSignal.timeout(5_000),
+        },
+      );
+      if (!response.ok) {
+        const detail = await response.text();
+        throw new Error(detail || `Computer Use turn-end backend returned HTTP ${response.status}.`);
+      }
+    },
+    catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+  }).pipe(
+    Effect.catchAll((error) =>
+      Effect.logWarning("Computer Use turn-end notification failed", {
+        threadId,
+        error: error.message,
+      }),
+    ),
+  );
+
+export const ComputerUseTurnLifecycleLive = Layer.scopedDiscard(
+  Effect.gen(function* () {
+    if (!COMPUTER_USE_ENABLED || !COMPUTER_USE_ENDPOINT || !COMPUTER_USE_TOKEN) {
+      return;
+    }
+    const orchestrationEngine = yield* OrchestrationEngineService;
+    yield* forkParked(
+      Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
+        if (event.type !== "thread.session-set") {
+          return Effect.void;
+        }
+        const { threadId, session } = event.payload;
+        if (
+          !isComputerUseTurnTerminalSession(session) ||
+          !ACTIVE_COMPUTER_USE_THREADS.delete(String(threadId))
+        ) {
+          return Effect.void;
+        }
+        return notifyComputerUseTurnEnded(String(threadId));
+      }),
+    );
+  }),
+);
 
 export const registerComputerUseTools = Effect.fn("McpHttpServer.registerComputerUseTools")(
   function* () {
