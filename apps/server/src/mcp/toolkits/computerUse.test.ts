@@ -1,6 +1,9 @@
 import { expect, it } from "@effect/vitest";
 
-import { COMPUTER_USE_TOOLS } from "./computerUse.ts";
+import {
+  COMPUTER_USE_TOOLS,
+  isComputerUseTurnTerminalSession,
+} from "./computerUse.ts";
 
 const EXPECTED_TOOLS = [
   "click",
@@ -46,4 +49,19 @@ it("keeps global pointer movement behind an explicit click method", () => {
     "sky_click",
     "global",
   ]);
+});
+
+it("ends Computer Use only after a thread has no active provider turn", () => {
+  for (const status of ["ready", "interrupted", "error", "stopped"]) {
+    expect(
+      isComputerUseTurnTerminalSession({ status, activeTurnId: null }),
+      status,
+    ).toBe(true);
+  }
+
+  expect(isComputerUseTurnTerminalSession({ status: "running", activeTurnId: null })).toBe(false);
+  expect(isComputerUseTurnTerminalSession({ status: "ready", activeTurnId: "turn-2" })).toBe(false);
+  expect(
+    isComputerUseTurnTerminalSession({ status: "interrupted", activeTurnId: "turn-2" }),
+  ).toBe(false);
 });
