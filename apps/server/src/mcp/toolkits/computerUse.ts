@@ -17,7 +17,6 @@ const DISABLED_TOOLS = new Set(
     .map((value) => value.trim())
     .filter(Boolean),
 );
-const ACTIVE_COMPUTER_USE_THREADS = new Set<string>();
 
 const clickMethods = ["auto", "accessibility", "app_post", "sky_click", "global"] as const;
 
@@ -289,7 +288,6 @@ const callComputerUseBackend = (
       if (DISABLED_TOOLS.has(tool)) {
         throw new Error(`Computer Use capability '${tool}' is disabled in Cozea Settings.`);
       }
-      ACTIVE_COMPUTER_USE_THREADS.add(String(invocation.threadId));
       const response = await fetch(`${COMPUTER_USE_ENDPOINT.replace(/\/$/, "")}/v1/call`, {
         method: "POST",
         headers: {
@@ -367,12 +365,14 @@ export const ComputerUseTurnLifecycleLive = Layer.effectDiscard(
           return Effect.void;
         }
         const { threadId, session } = event.payload;
-        if (
-          !isComputerUseTurnTerminalSession(session) ||
-          !ACTIVE_COMPUTER_USE_THREADS.delete(String(threadId))
-        ) {
+        if (!isComputerUseTurnTerminalSession(session)) {
           return Effect.void;
         }
+        // Electron owns per-thread Computer Use policy and active native state.
+        // Forward every accepted canonical terminal session so scheduled threads
+        // that were explicitly denied (and therefore never called a CU tool) can
+        // release their policy from an authoritative lifecycle event. Electron
+        // ignores terminal notifications for threads it does not own.
         return notifyComputerUseTurnEnded(String(threadId));
       }),
     );
