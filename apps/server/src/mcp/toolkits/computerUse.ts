@@ -355,7 +355,7 @@ const notifyComputerUseTurnEnded = (threadId: string) =>
     ),
   );
 
-export const ComputerUseTurnLifecycleLive = Layer.scopedDiscard(
+export const ComputerUseTurnLifecycleLive = Layer.effectDiscard(
   Effect.gen(function* () {
     if (!COMPUTER_USE_ENABLED || !COMPUTER_USE_ENDPOINT || !COMPUTER_USE_TOKEN) {
       return;
