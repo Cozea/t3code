@@ -13,7 +13,10 @@ import packageJson from "../../package.json" with { type: "json" };
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
-import { registerComputerUseTools } from "./toolkits/computerUse.ts";
+import {
+  ComputerUseTurnLifecycleLive,
+  registerComputerUseTools,
+} from "./toolkits/computerUse.ts";
 import {
   DevAppAuthoringDocsToolkitHandlersLive,
   PreviewSnapshotToolkitHandlersLive,
@@ -225,6 +228,7 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewStandardToolkitRegistrationLive,
   PreviewSnapshotRegistrationLive,
   ComputerUseToolkitRegistrationLive,
+  ComputerUseTurnLifecycleLive,
 );
 
 const McpTransportLive = McpServer.layerHttp({
