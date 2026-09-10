@@ -2265,6 +2265,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         next.delete(webContentsId);
         return next;
       });
+      // A grant armed on these contents must not outlive the vouch that
+      // authorised it. Main revokes before it destroys a view, so without this a
+      // display-media request landing in between would still be granted.
+      if (pendingRecording?.webContents.id === webContentsId) pendingRecording = null;
     },
   );
 
@@ -3402,6 +3406,38 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     });
   };
 
+  /**
+   * The renderer that issues `getDisplayMedia` for a tab's recording.
+   *
+   * For both backends that is the current Cozea main renderer, but each reaches
+   * it through its own proof of ownership rather than a shared fallback: a
+   * renderer guest through its embedder, exactly as before, whose embedder
+   * registration already checks against the main renderer; a main-created view
+   * through the vouch main made in-process when it created that view. Contents
+   * with neither proof are refused. A missing embedder is never, by itself, a
+   * reason to record into the main renderer -- that would let any hostless
+   * contents claim a grant.
+   */
+  const resolveRecordingRequester = Effect.fn("PreviewManager.resolveRecordingRequester")(
+    function* (tabId: string, wc: Electron.WebContents) {
+      if (wc.getType() === "webview") {
+        const host = wc.hostWebContents;
+        if (host == null) {
+          return yield* new PreviewMainWindowClosedError({ tabId });
+        }
+        return host;
+      }
+      if ((yield* Ref.get(nativeBrowserContentsRef)).has(wc.id)) {
+        const mainWindow = yield* Ref.get(mainWindowRef);
+        if (Option.isNone(mainWindow) || mainWindow.value.isDestroyed()) {
+          return yield* new PreviewMainWindowClosedError({ tabId });
+        }
+        return mainWindow.value.webContents;
+      }
+      return yield* new PreviewWebContentsNotFoundError({ tabId, webContentsId: wc.id });
+    },
+  );
+
   const startRecording = Effect.fn("PreviewManager.startRecording")(function* (tabId: string) {
     if ((yield* Ref.get(closingTabIdsRef)).has(tabId)) {
       return yield* new PreviewTabNotFoundError({ tabId });
@@ -3411,10 +3447,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       Effect.gen(function* () {
         yield* startFrameCapture(tabId, "recording");
         const wc = yield* requireWebContents(tabId);
-        const requestWebContents = wc.hostWebContents;
-        if (requestWebContents === null) {
-          return yield* new PreviewMainWindowClosedError({ tabId });
-        }
+        const requestWebContents = yield* resolveRecordingRequester(tabId, wc);
         yield* attemptPromise(
           {
             operation: "recording.warmSource",
@@ -3429,6 +3462,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             tabId,
             webContentsId: wc.id,
           });
+        }
+        // Ownership can change while the source warms: main may withdraw a native
+        // vouch, or replace the main window. Re-prove it before arming a grant.
+        if ((yield* resolveRecordingRequester(tabId, wc)) !== requestWebContents) {
+          return yield* new PreviewMainWindowClosedError({ tabId });
         }
         if (!frameCaptureWindowOpen || requestWebContents.isDestroyed()) {
           return yield* new PreviewMainWindowClosedError({ tabId });

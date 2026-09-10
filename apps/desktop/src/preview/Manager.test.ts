@@ -4236,3 +4236,200 @@ describe("browser contents registration ownership", () => {
     ),
   );
 });
+
+describe("recording requester selection", () => {
+  /** A `WebContentsView` created by Cozea main: no embedder, not a webview. */
+  const makeNativeViewContents = (id: number) =>
+    ({
+      id,
+      mainFrame: { routingId: id },
+      hostWebContents: null,
+      executeJavaScript: vi.fn(async () => ({ width: 1280, height: 720 })),
+      isDestroyed: () => false,
+      getType: () => "browserView",
+      getURL: () => "https://example.com/native",
+      getTitle: () => "Native",
+      isLoading: () => false,
+      getZoomFactor: () => 1,
+      setZoomFactor: vi.fn(),
+      setAudioMuted: vi.fn(),
+      setBackgroundThrottling: vi.fn(),
+      isCurrentlyAudible: () => false,
+      loadURL: vi.fn(async () => undefined),
+      on: vi.fn(),
+      off: vi.fn(),
+      ipc: { on: vi.fn(), off: vi.fn() },
+      send: vi.fn(),
+      navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+      setWindowOpenHandler: vi.fn(),
+      debugger: {
+        isAttached: () => false,
+        attach: vi.fn(),
+        sendCommand: vi.fn(async () => undefined),
+        on: vi.fn(),
+        off: vi.fn(),
+      },
+      capturePage: vi.fn(async () => ({
+        toJPEG: () => Buffer.from([]),
+        getSize: () => ({ width: 1280, height: 720 }),
+      })),
+    }) as unknown as Electron.WebContents;
+
+  /** The Cozea main window, whose renderer requests display media. */
+  const makeMainWindow = () => {
+    const renderer = Object.assign(makeTestHostWebContents(), {
+      id: 9,
+      mainFrame: { frameTreeNodeId: 9 },
+      setBackgroundThrottling: vi.fn(),
+    });
+    const window = { isDestroyed: () => false, once: vi.fn(), webContents: renderer } as never;
+    return { window, renderer };
+  };
+
+  const captureTrigger = expect.stringContaining("__t3DesktopPreviewRecordingCapture");
+
+  const grantFor = (host: ReturnType<typeof makeTestHostWebContents>) => {
+    const grants: Array<{ video?: unknown }> = [];
+    host.displayMediaHandler()?.({ frame: host.mainFrame }, (value) => {
+      grants.push(value);
+    });
+    return grants;
+  };
+
+  const openTrustedNativeTab = (
+    manager: PreviewManager.PreviewManager["Service"],
+    tabId: string,
+    id: number,
+  ) =>
+    Effect.gen(function* () {
+      const native = makeNativeViewContents(id);
+      fromId.mockImplementation((candidate) => (candidate === id ? native : null));
+      yield* manager.createTab(tabId);
+      yield* manager.trustNativeBrowserContents(id);
+      yield* manager.registerBrowserContents(tabId, id);
+      return native;
+    });
+
+  effectIt.effect("a renderer guest still records through its own embedder", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const host = makeTestHostWebContents();
+        const guest = makeTestPreviewWebContents(
+          vi.fn(async () => ({
+            toJPEG: () => Buffer.from("frame"),
+            getSize: () => ({ width: 1280, height: 720 }),
+          })),
+          41,
+          host,
+        );
+        fromId.mockImplementation((id) => (id === 41 ? guest : null));
+        const { window, renderer } = makeMainWindow();
+        yield* manager.createTab("tab_legacy_requester");
+        yield* manager.registerWebview("tab_legacy_requester", 41);
+        yield* manager.setMainWindow(window);
+
+        yield* manager.startRecording("tab_legacy_requester");
+
+        // Unchanged: the guest's embedder is the requester and the grant source
+        // is the guest itself.
+        expect(host.executeJavaScript).toHaveBeenCalledWith(captureTrigger, true);
+        expect(host.session.setDisplayMediaRequestHandler).toHaveBeenCalled();
+        expect(renderer.executeJavaScript).not.toHaveBeenCalled();
+        expect(grantFor(host)).toEqual([{ video: { routingId: 41 } }]);
+      }),
+    ),
+  );
+
+  effectIt.effect("a trusted native view records through the main renderer", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const { window, renderer } = makeMainWindow();
+        yield* manager.setMainWindow(window);
+        yield* openTrustedNativeTab(manager, "tab_native_requester", 52);
+
+        yield* manager.startRecording("tab_native_requester");
+
+        expect(renderer.executeJavaScript).toHaveBeenCalledWith(captureTrigger, true);
+        expect(renderer.session.setDisplayMediaRequestHandler).toHaveBeenCalled();
+        // The source is the exact native contents shown to the user, not the
+        // renderer that asked for it.
+        expect(grantFor(renderer)).toEqual([{ video: { routingId: 52 } }]);
+      }),
+    ),
+  );
+
+  effectIt.effect("a hostless view main no longer vouches for cannot record", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const { window, renderer } = makeMainWindow();
+        yield* manager.setMainWindow(window);
+        yield* openTrustedNativeTab(manager, "tab_revoked_requester", 53);
+        // What main does before it destroys a view. A missing embedder must not
+        // stand in for the withdrawn vouch.
+        yield* manager.revokeNativeBrowserContents(53);
+
+        const exit = yield* Effect.exit(manager.startRecording("tab_revoked_requester"));
+
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isFailure(exit)) {
+          expect(Option.getOrThrow(Cause.findErrorOption(exit.cause))).toMatchObject({
+            _tag: "PreviewWebContentsNotFoundError",
+            tabId: "tab_revoked_requester",
+            webContentsId: 53,
+          });
+        }
+        expect(renderer.executeJavaScript).not.toHaveBeenCalled();
+        expect(renderer.session.setDisplayMediaRequestHandler).not.toHaveBeenCalled();
+      }),
+    ),
+  );
+
+  effectIt.effect("a trusted native view cannot record without a main renderer", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        yield* openTrustedNativeTab(manager, "tab_windowless_requester", 54);
+
+        const exit = yield* Effect.exit(manager.startRecording("tab_windowless_requester"));
+
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isFailure(exit)) {
+          expect(Option.getOrThrow(Cause.findErrorOption(exit.cause))).toMatchObject({
+            _tag: "PreviewMainWindowClosedError",
+            tabId: "tab_windowless_requester",
+          });
+        }
+      }),
+    ),
+  );
+
+  effectIt.effect("withdrawing the vouch cancels a grant armed for that view", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const { window, renderer } = makeMainWindow();
+        yield* manager.setMainWindow(window);
+        yield* openTrustedNativeTab(manager, "tab_armed_revoke", 55);
+        yield* manager.startRecording("tab_armed_revoke");
+
+        yield* manager.revokeNativeBrowserContents(55);
+
+        // The request that would have redeemed the arm lands after revocation.
+        expect(grantFor(renderer)).toEqual([{}]);
+      }),
+    ),
+  );
+
+  effectIt.effect("closing a native tab cancels a grant armed for it", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const { window, renderer } = makeMainWindow();
+        yield* manager.setMainWindow(window);
+        yield* openTrustedNativeTab(manager, "tab_armed_close", 56);
+        yield* manager.startRecording("tab_armed_close");
+
+        yield* manager.closeTab("tab_armed_close");
+
+        expect(grantFor(renderer)).toEqual([{}]);
+      }),
+    ),
+  );
+});
