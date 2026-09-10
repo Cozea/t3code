@@ -1,3 +1,4 @@
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -28,10 +29,10 @@ interface ComputerUseToolSpec {
   readonly description: string;
   readonly inputSchema: Record<string, unknown>;
   readonly annotations: {
-    readonly destructiveHint: false;
-    readonly openWorldHint: false;
-    readonly idempotentHint?: true;
-    readonly readOnlyHint?: true;
+    readonly destructiveHint: boolean;
+    readonly openWorldHint: boolean;
+    readonly idempotentHint?: boolean;
+    readonly readOnlyHint?: boolean;
   };
 }
 
@@ -79,148 +80,7 @@ const readAnnotations = {
  * open-computer-use v0.3.3 (41c5294c). Cozea owns transport/policy only; the
  * execution engine remains OpenComputerUseKit / the upstream platform runtime.
  */
-export const COMPUTER_USE_TOOLS: ReadonlyArray<ComputerUseToolSpec> = [
-  {
-    name: "click",
-    description:
-      "Click an element by index or pixel coordinates from screenshot. This tool is part of plugin `Computer Use`.",
-    annotations: actionAnnotations,
-    inputSchema: objectSchema(
-      {
-        app: stringProperty("App name or bundle identifier"),
-        element_index: stringProperty("Element index to click"),
-        x: numberProperty("X coordinate in screenshot pixel coordinates"),
-        y: numberProperty("Y coordinate in screenshot pixel coordinates"),
-        click_count: integerProperty("Number of clicks. Defaults to 1"),
-        mouse_button: stringProperty("Mouse button to click. Defaults to left.", [
-          "left",
-          "right",
-          "middle",
-        ]),
-        click_method: stringProperty(
-          "Click implementation: auto (default), accessibility, app_post, sky_click, or global. Accessibility requires element_index. app_post sends a public event directly to the target app. sky_click uses the macOS SkyLight background window path. Global may move the system pointer and requires explicit user enablement in Cozea.",
-          clickMethods,
-        ),
-      },
-      ["app"],
-    ),
-  },
-  {
-    name: "drag",
-    description:
-      "Drag from one point to another using pixel coordinates. This tool is part of plugin `Computer Use`.",
-    annotations: actionAnnotations,
-    inputSchema: objectSchema(
-      {
-        app: stringProperty("App name or bundle identifier"),
-        from_x: numberProperty("Start X coordinate"),
-        from_y: numberProperty("Start Y coordinate"),
-        to_x: numberProperty("End X coordinate"),
-        to_y: numberProperty("End Y coordinate"),
-      },
-      ["app", "from_x", "from_y", "to_x", "to_y"],
-    ),
-  },
-  {
-    name: "get_app_state",
-    description:
-      "Start an app use session if needed, then get the state of the app's key window and return a screenshot and accessibility tree. This must be called once per assistant turn before interacting with the app. This tool is part of plugin `Computer Use`.",
-    annotations: readAnnotations,
-    inputSchema: objectSchema(
-      {
-        app: stringProperty("App name or bundle identifier"),
-        text_limit: textLimitProperty(
-          "Maximum text characters to return. Use \"max\" for full text. Defaults to 500.",
-        ),
-        max_tree_nodes: positiveIntegerProperty(
-          "Maximum accessibility tree nodes to render. Defaults to 1200.",
-        ),
-        max_tree_depth: positiveIntegerProperty(
-          "Maximum accessibility tree depth to render. Defaults to 64.",
-        ),
-      },
-      ["app"],
-    ),
-  },
-  {
-    name: "list_apps",
-    description:
-      "List the apps on this computer. Returns the set of apps that are currently running, as well as any that have been used in the last 14 days, including details on usage frequency. This tool is part of plugin `Computer Use`.",
-    annotations: readAnnotations,
-    inputSchema: objectSchema({}),
-  },
-  {
-    name: "perform_secondary_action",
-    description:
-      "Invoke a secondary accessibility action exposed by an element. This tool is part of plugin `Computer Use`.",
-    annotations: actionAnnotations,
-    inputSchema: objectSchema(
-      {
-        app: stringProperty("App name or bundle identifier"),
-        element_index: stringProperty("Element identifier"),
-        action: stringProperty("Secondary accessibility action name"),
-      },
-      ["app", "element_index", "action"],
-    ),
-  },
-  {
-    name: "press_key",
-    description:
-      "Press a key or key-combination on the keyboard, including modifier and navigation keys.\n  - This supports xdotool's `key` syntax.\n  - Examples: \"a\", \"Return\", \"Tab\", \"super+c\", \"Up\", \"KP_0\" (for the numpad 0 key). This tool is part of plugin `Computer Use`.",
-    annotations: actionAnnotations,
-    inputSchema: objectSchema(
-      {
-        app: stringProperty("App name or bundle identifier"),
-        key: stringProperty("Key or key combination to press"),
-      },
-      ["app", "key"],
-    ),
-  },
-  {
-    name: "scroll",
-    description:
-      "Scroll an element in a direction by a number of pages. This tool is part of plugin `Computer Use`.",
-    annotations: actionAnnotations,
-    inputSchema: objectSchema(
-      {
-        app: stringProperty("App name or bundle identifier"),
-        direction: stringProperty("Scroll direction: up, down, left, or right"),
-        element_index: stringProperty("Element identifier"),
-        pages: numberProperty(
-          "Number of pages to scroll. Fractional values are supported. Defaults to 1",
-        ),
-      },
-      ["app", "element_index", "direction"],
-    ),
-  },
-  {
-    name: "set_value",
-    description:
-      "Set the value of a settable accessibility element. This tool is part of plugin `Computer Use`.",
-    annotations: actionAnnotations,
-    inputSchema: objectSchema(
-      {
-        app: stringProperty("App name or bundle identifier"),
-        element_index: stringProperty("Element identifier"),
-        value: stringProperty("Value to assign"),
-      },
-      ["app", "element_index", "value"],
-    ),
-  },
-  {
-    name: "type_text",
-    description:
-      "Type literal text using keyboard input. This tool is part of plugin `Computer Use`.",
-    annotations: actionAnnotations,
-    inputSchema: objectSchema(
-      {
-        app: stringProperty("App name or bundle identifier"),
-        text: stringProperty("Literal text to type"),
-      },
-      ["app", "text"],
-    ),
-  },
-];
+export const COMPUTER_USE_TOOLS: ReadonlyArray<ComputerUseToolSpec> = [{"name":"list_apps","description":"List currently running macOS applications with PIDs. Does not launch apps or include a recent-app catalogue.","annotations":{"readOnlyHint":true,"idempotentHint":true,"destructiveHint":false,"openWorldHint":false},"inputSchema":{"type":"object","properties":{},"required":[],"additionalProperties":false}},{"name":"get_app_state","description":"Explicitly observe a running, visible target window. Returns snapshot_id and the requested tree/screenshot. Call before the first action in each turn and after navigation, dialogs or reflow. Does not activate, launch or unminimize apps.","annotations":{"readOnlyHint":true,"idempotentHint":true,"destructiveHint":false,"openWorldHint":false},"inputSchema":{"type":"object","properties":{"app":{"type":"string","description":"Running application name, bundle identifier, or PID returned by list_apps.","minLength":1,"maxLength":512},"include_text":{"type":"boolean","default":true},"include_screenshot":{"type":"boolean","default":true},"text_limit":{"anyOf":[{"type":"integer","description":"Text character budget per element.","minimum":1,"maximum":100000},{"type":"string","enum":["max"]}],"default":500},"max_tree_nodes":{"type":"integer","description":"Tree node budget.","minimum":1,"maximum":5000,"default":1200},"max_tree_depth":{"type":"integer","description":"Tree depth budget.","minimum":1,"maximum":128,"default":64}},"required":["app"],"additionalProperties":false}},{"name":"click","description":"Move the visible Cozea cursor to the target, then click. Specify either element_index or both x and y. Coordinates belong to the returned screenshot, not global display coordinates. Returns a compact acknowledgement only, never a fresh screenshot/tree. Call get_app_state when the next target depends on changed UI. Never retry automatically after DELIVERY_UNKNOWN.","annotations":{"readOnlyHint":false,"idempotentHint":false,"destructiveHint":true,"openWorldHint":true},"inputSchema":{"type":"object","properties":{"app":{"type":"string","description":"Running application name, bundle identifier, or PID returned by list_apps.","minLength":1,"maxLength":512},"snapshot_id":{"type":"string","description":"snapshot_id from get_app_state. Omit to use this session/app's latest observation.","maxLength":128},"element_index":{"anyOf":[{"type":"string","description":"Element index from the observed accessibility tree.","pattern":"^\\d+$"},{"type":"integer","description":"Element index.","minimum":0,"maximum":1000000}]},"x":{"type":"number","description":"Screenshot pixel X.","minimum":0},"y":{"type":"number","description":"Screenshot pixel Y.","minimum":0},"click_count":{"type":"integer","description":"Click count.","minimum":1,"maximum":3,"default":1},"mouse_button":{"type":"string","description":"Mouse button.","enum":["left","right","middle"],"default":"left"},"click_method":{"type":"string","description":"auto selects semantic AX then targeted SkyLight/PID input. sky_click supports one or two left clicks. global requires explicit user permission and a foreground target; it may move the real pointer.","enum":["auto","accessibility","app_post","sky_click","global"],"default":"auto"}},"required":["app"],"additionalProperties":false,"oneOf":[{"required":["element_index"],"not":{"anyOf":[{"required":["x"]},{"required":["y"]}]}},{"required":["x","y"],"not":{"required":["element_index"]}}]}},{"name":"perform_secondary_action","description":"Move the visible cursor, then invoke an action exposed by an indexed accessibility element. Returns a compact acknowledgement only, never a fresh screenshot/tree. Call get_app_state when the next target depends on changed UI. Never retry automatically after DELIVERY_UNKNOWN.","annotations":{"readOnlyHint":false,"idempotentHint":false,"destructiveHint":true,"openWorldHint":true},"inputSchema":{"type":"object","properties":{"app":{"type":"string","description":"Running application name, bundle identifier, or PID returned by list_apps.","minLength":1,"maxLength":512},"snapshot_id":{"type":"string","description":"snapshot_id from get_app_state. Omit to use this session/app's latest observation.","maxLength":128},"element_index":{"anyOf":[{"type":"string","description":"Element index from the observed accessibility tree.","pattern":"^\\d+$"},{"type":"integer","description":"Element index.","minimum":0,"maximum":1000000}]},"action":{"type":"string","description":"Exposed secondary action.","minLength":1,"maxLength":256}},"required":["app","element_index","action"],"additionalProperties":false}},{"name":"scroll","description":"Move the visible cursor to the indexed scroll region, then scroll it. Observe again before reusing screenshot coordinates. Returns a compact acknowledgement only, never a fresh screenshot/tree. Call get_app_state when the next target depends on changed UI. Never retry automatically after DELIVERY_UNKNOWN.","annotations":{"readOnlyHint":false,"idempotentHint":false,"destructiveHint":true,"openWorldHint":true},"inputSchema":{"type":"object","properties":{"app":{"type":"string","description":"Running application name, bundle identifier, or PID returned by list_apps.","minLength":1,"maxLength":512},"snapshot_id":{"type":"string","description":"snapshot_id from get_app_state. Omit to use this session/app's latest observation.","maxLength":128},"element_index":{"anyOf":[{"type":"string","description":"Element index from the observed accessibility tree.","pattern":"^\\d+$"},{"type":"integer","description":"Element index.","minimum":0,"maximum":1000000}]},"direction":{"type":"string","description":"Direction.","enum":["up","down","left","right"]},"pages":{"type":"number","description":"Pages to scroll, including fractional values.","exclusiveMinimum":0,"maximum":20,"default":1}},"required":["app","element_index","direction"],"additionalProperties":false}},{"name":"drag","description":"Drag along the visible cursor path between two points from the same screenshot. Returns a compact acknowledgement only, never a fresh screenshot/tree. Call get_app_state when the next target depends on changed UI. Never retry automatically after DELIVERY_UNKNOWN.","annotations":{"readOnlyHint":false,"idempotentHint":false,"destructiveHint":true,"openWorldHint":true},"inputSchema":{"type":"object","properties":{"app":{"type":"string","description":"Running application name, bundle identifier, or PID returned by list_apps.","minLength":1,"maxLength":512},"snapshot_id":{"type":"string","description":"snapshot_id from get_app_state. Omit to use this session/app's latest observation.","maxLength":128},"from_x":{"type":"number","description":"Screenshot pixel coordinate.","minimum":0},"from_y":{"type":"number","description":"Screenshot pixel coordinate.","minimum":0},"to_x":{"type":"number","description":"Screenshot pixel coordinate.","minimum":0},"to_y":{"type":"number","description":"Screenshot pixel coordinate.","minimum":0}},"required":["app","from_x","from_y","to_x","to_y"],"additionalProperties":false}},{"name":"type_text","description":"Type at the current caret/selection of the observed window's focused editable control. Click that control first. This does not replace the full document value. Returns a compact acknowledgement only, never a fresh screenshot/tree. Call get_app_state when the next target depends on changed UI. Never retry automatically after DELIVERY_UNKNOWN.","annotations":{"readOnlyHint":false,"idempotentHint":false,"destructiveHint":true,"openWorldHint":true},"inputSchema":{"type":"object","properties":{"app":{"type":"string","description":"Running application name, bundle identifier, or PID returned by list_apps.","minLength":1,"maxLength":512},"snapshot_id":{"type":"string","description":"snapshot_id from get_app_state. Omit to use this session/app's latest observation.","maxLength":128},"text":{"type":"string","description":"Literal text.","maxLength":65536}},"required":["app","text"],"additionalProperties":false}},{"name":"press_key","description":"Press a key or shortcut in the observed focused window, such as Return, Tab, super+c or Up. Returns a compact acknowledgement only, never a fresh screenshot/tree. Call get_app_state when the next target depends on changed UI. Never retry automatically after DELIVERY_UNKNOWN.","annotations":{"readOnlyHint":false,"idempotentHint":false,"destructiveHint":true,"openWorldHint":true},"inputSchema":{"type":"object","properties":{"app":{"type":"string","description":"Running application name, bundle identifier, or PID returned by list_apps.","minLength":1,"maxLength":512},"snapshot_id":{"type":"string","description":"snapshot_id from get_app_state. Omit to use this session/app's latest observation.","maxLength":128},"key":{"type":"string","description":"Key combination.","minLength":1,"maxLength":256}},"required":["app","key"],"additionalProperties":false}},{"name":"set_value","description":"Move the visible cursor to an indexed, settable AXValue control, then replace its value. Never falls back to typing or clipboard. Returns a compact acknowledgement only, never a fresh screenshot/tree. Call get_app_state when the next target depends on changed UI. Never retry automatically after DELIVERY_UNKNOWN.","annotations":{"readOnlyHint":false,"idempotentHint":false,"destructiveHint":true,"openWorldHint":true},"inputSchema":{"type":"object","properties":{"app":{"type":"string","description":"Running application name, bundle identifier, or PID returned by list_apps.","minLength":1,"maxLength":512},"snapshot_id":{"type":"string","description":"snapshot_id from get_app_state. Omit to use this session/app's latest observation.","maxLength":128},"element_index":{"anyOf":[{"type":"string","description":"Element index from the observed accessibility tree.","pattern":"^\\d+$"},{"type":"integer","description":"Element index.","minimum":0,"maximum":1000000}]},"value":{"type":"string","description":"Replacement value.","maxLength":65536}},"required":["app","element_index","value"],"additionalProperties":false}}];
 
 interface BackendContentItem {
   readonly type: "text" | "image";
@@ -348,10 +208,10 @@ const notifyComputerUseTurnEnded = (threadId: string) =>
     },
     catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
   }).pipe(
-    Effect.catchAll((error) =>
+    Effect.catchCause((cause) =>
       Effect.logWarning("Computer Use turn-end notification failed", {
         threadId,
-        error: error.message,
+        error: Cause.pretty(cause),
       }),
     ),
   );
@@ -412,9 +272,11 @@ export const registerComputerUseTools = Effect.fn("McpHttpServer.registerCompute
             );
             return callComputerUseBackend(spec.name, payload, invocation).pipe(
               Effect.map(toMcpResult),
-              Effect.catchAll((error) =>
-                Effect.succeed(backendFailure(error.message || "Computer Use failed.")),
-              ),
+              Effect.catchCause((cause) => {
+                const error = Cause.squash(cause);
+                const message = error instanceof Error ? error.message : String(error);
+                return Effect.succeed(backendFailure(message || "Computer Use failed."));
+              }),
             );
           }),
       });
