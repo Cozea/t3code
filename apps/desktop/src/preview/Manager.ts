@@ -641,6 +641,16 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     { readonly semaphore: Semaphore.Semaphore; users: number }
   >();
   const tabLifecycleGenerations = new Map<string, number>();
+  /**
+   * WebContents ids Cozea main has vouched for, populated only by in-process
+   * calls from the service that created the native browser view.
+   *
+   * Registration cannot re-derive renderer parentage for a main-created
+   * `WebContentsView`: it has no `hostWebContents`, so the legacy guard would
+   * reject it. This set is the replacement proof of ownership, and it is
+   * deliberately not reachable over IPC -- see `trustNativeBrowserContents`.
+   */
+  const nativeBrowserContentsRef = yield* Ref.make<ReadonlySet<number>>(new Set());
 
   const attempt = <A>(errorContext: PreviewOperationContext, evaluate: () => A) =>
     Effect.try({
@@ -2062,10 +2072,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     );
   });
 
-  const registerWebviewUnlocked = Effect.fn("PreviewManager.registerWebviewUnlocked")(function* (
+  const registerBrowserContentsUnlocked = Effect.fn(
+    "PreviewManager.registerBrowserContentsUnlocked",
+  )(function* (
     tabId: string,
     webContentsId: number,
     expectedGeneration: number | undefined,
+    ownership: BrowserContentsOwnership,
   ) {
     const tab = (yield* SynchronizedRef.get(tabsRef)).get(tabId);
     if (
@@ -2076,13 +2089,22 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       return yield* new PreviewTabNotFoundError({ tabId });
     }
     const wc = webContents.fromId(webContentsId);
-    const mainWindow = yield* Ref.get(mainWindowRef);
-    if (
-      !wc ||
-      wc.isDestroyed() ||
-      wc.getType() !== "webview" ||
-      (Option.isSome(mainWindow) && wc.hostWebContents !== mainWindow.value.webContents)
-    ) {
+    if (!wc || wc.isDestroyed()) {
+      return yield* new PreviewWebContentsNotFoundError({ tabId, webContentsId });
+    }
+    // Ownership is proven differently per backend, but it is always proven. A
+    // renderer-created guest is checked against the embedder it hangs off; a
+    // main-created view is checked against what main vouched for in-process.
+    // Neither path accepts an arbitrary WebContents id.
+    if (ownership === "renderer-webview") {
+      const mainWindow = yield* Ref.get(mainWindowRef);
+      if (
+        wc.getType() !== "webview" ||
+        (Option.isSome(mainWindow) && wc.hostWebContents !== mainWindow.value.webContents)
+      ) {
+        return yield* new PreviewWebContentsNotFoundError({ tabId, webContentsId });
+      }
+    } else if (!(yield* Ref.get(nativeBrowserContentsRef)).has(webContentsId)) {
       return yield* new PreviewWebContentsNotFoundError({ tabId, webContentsId });
     }
     const attached = yield* Ref.get(attachedRef);
@@ -2094,7 +2116,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       // changed. Only push its zoom back down — Chromium may have just handed
       // this guest the app window's zoom level.
       yield* assertTabZoom(tabId);
-      yield* attempt({ operation: "registerWebview.sendTheme", tabId, webContentsId }, () =>
+      yield* attempt({ operation: "registerBrowserContents.sendTheme", tabId, webContentsId }, () =>
         wc.send(ANNOTATION_THEME_CHANNEL, annotationTheme),
       );
       return;
@@ -2128,18 +2150,20 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     // attaching while the app UI is zoomed starts at the embedder's inherited
     // zoom level, which is not the preview's zoom. Done before the guest is
     // published so it never paints a frame at the inherited zoom.
-    yield* attempt({ operation: "registerWebview.restoreZoomFactor", tabId, webContentsId }, () =>
-      wc.setZoomFactor(currentTab.zoomFactor),
+    yield* attempt(
+      { operation: "registerBrowserContents.restoreZoomFactor", tabId, webContentsId },
+      () => wc.setZoomFactor(currentTab.zoomFactor),
     );
     // A replacement guest attaches unmuted, so reassert the tab's mute before it
     // is published rather than letting it emit audio the user already silenced.
     // Settled again after attach, below, the same way zoom is.
-    yield* attempt({ operation: "registerWebview.restoreAudioMuted", tabId, webContentsId }, () =>
-      wc.setAudioMuted(currentTab.audioMuted),
+    yield* attempt(
+      { operation: "registerBrowserContents.restoreAudioMuted", tabId, webContentsId },
+      () => wc.setAudioMuted(currentTab.audioMuted),
     );
     yield* attachListeners(tabId, wc);
     const readAudible = attempt(
-      { operation: "registerWebview.readAudible", tabId, webContentsId },
+      { operation: "registerBrowserContents.readAudible", tabId, webContentsId },
       () => wc.isCurrentlyAudible(),
     ).pipe(Effect.orElseSucceed(() => false));
     const attachedAudible = yield* readAudible;
@@ -2203,7 +2227,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     // syncTabAudible's ownership check, so re-read and reconcile through the
     // same path the event uses.
     yield* syncTabAudible(tabId, wc, yield* readAudible);
-    yield* attempt({ operation: "registerWebview.sendTheme", tabId, webContentsId }, () =>
+    yield* attempt({ operation: "registerBrowserContents.sendTheme", tabId, webContentsId }, () =>
       wc.send(ANNOTATION_THEME_CHANNEL, annotationTheme),
     );
     const latestNavStatus = (yield* SynchronizedRef.get(tabsRef)).get(tabId)?.navStatus;
@@ -2214,12 +2238,35 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       wc.getURL() !== pendingUrl
     ) {
       runFork(
-        attemptPromise({ operation: "registerWebview.loadPendingUrl", tabId, webContentsId }, () =>
-          wc.loadURL(pendingUrl),
+        attemptPromise(
+          { operation: "registerBrowserContents.loadPendingUrl", tabId, webContentsId },
+          () => wc.loadURL(pendingUrl),
         ).pipe(Effect.ignore),
       );
     }
   });
+
+  /**
+   * Vouch for a WebContents that Cozea main created for a native browser
+   * surface. Main-process callers only: exposing this over IPC would let a
+   * renderer nominate an arbitrary WebContents and defeat the ownership check.
+   */
+  const trustNativeBrowserContents = Effect.fn("PreviewManager.trustNativeBrowserContents")(
+    function* (webContentsId: number) {
+      yield* Ref.update(nativeBrowserContentsRef, (ids) => new Set(ids).add(webContentsId));
+    },
+  );
+
+  /** Withdraw a vouch, on destroy or crash, so a recycled id cannot inherit it. */
+  const revokeNativeBrowserContents = Effect.fn("PreviewManager.revokeNativeBrowserContents")(
+    function* (webContentsId: number) {
+      yield* Ref.update(nativeBrowserContentsRef, (ids) => {
+        const next = new Set(ids);
+        next.delete(webContentsId);
+        return next;
+      });
+    },
+  );
 
   const registerWebview = Effect.fn("PreviewManager.registerWebview")(function* (
     tabId: string,
@@ -2228,7 +2275,18 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const expectedGeneration = tabLifecycleGenerations.get(tabId);
     return yield* withTabLifecycleLock(
       tabId,
-      registerWebviewUnlocked(tabId, webContentsId, expectedGeneration),
+      registerBrowserContentsUnlocked(tabId, webContentsId, expectedGeneration, "renderer-webview"),
+    );
+  });
+
+  const registerBrowserContents = Effect.fn("PreviewManager.registerBrowserContents")(function* (
+    tabId: string,
+    webContentsId: number,
+  ) {
+    const expectedGeneration = tabLifecycleGenerations.get(tabId);
+    return yield* withTabLifecycleLock(
+      tabId,
+      registerBrowserContentsUnlocked(tabId, webContentsId, expectedGeneration, "native-view"),
     );
   });
 
@@ -4176,6 +4234,9 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     reapplyZoom,
     refresh,
     registerWebview,
+    registerBrowserContents,
+    trustNativeBrowserContents,
+    revokeNativeBrowserContents,
     resetZoom: (tabId: string) => applyZoom(tabId, () => DEFAULT_ZOOM_FACTOR),
     revealArtifact,
     saveRecording,
@@ -4506,8 +4567,25 @@ export class PreviewManager extends Context.Service<
       defaults?: DesktopPreviewTabDefaults,
     ) => Effect.Effect<PreviewTabState, PreviewManagerError>;
     readonly closeTab: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
+    /** Transitional: a renderer-created `<webview>` guest announcing itself. */
     readonly registerWebview: (
       tabId: string,
+      webContentsId: number,
+    ) => Effect.Effect<void, PreviewManagerError>;
+    /**
+     * Register a browser WebContents that Cozea main created and vouched for
+     * via `trustNativeBrowserContents`. Backend-neutral replacement for
+     * `registerWebview`.
+     */
+    readonly registerBrowserContents: (
+      tabId: string,
+      webContentsId: number,
+    ) => Effect.Effect<void, PreviewManagerError>;
+    /** Main-process only. Never expose over IPC; see the implementation note. */
+    readonly trustNativeBrowserContents: (
+      webContentsId: number,
+    ) => Effect.Effect<void, PreviewManagerError>;
+    readonly revokeNativeBrowserContents: (
       webContentsId: number,
     ) => Effect.Effect<void, PreviewManagerError>;
     readonly navigate: (tabId: string, url: string) => Effect.Effect<void, PreviewManagerError>;
@@ -4602,6 +4680,16 @@ export class PreviewManager extends Context.Service<
   }
 >()("@t3tools/desktop/preview/Manager/PreviewManager") {}
 
+/**
+ * How a caller proves it owns the WebContents it is registering.
+ *
+ * `renderer-webview` is the transitional path: a renderer-created `<webview>`
+ * guest, validated against the embedder it hangs off. `native-view` is a
+ * `WebContentsView` created by Cozea main, validated against the in-process
+ * vouch recorded by the service that created it.
+ */
+type BrowserContentsOwnership = "renderer-webview" | "native-view";
+
 export const make = Effect.gen(function* PreviewManagerMake() {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const browserSession = yield* BrowserSession.BrowserSession;
@@ -4627,6 +4715,9 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     createTab: operations.createTab,
     closeTab: operations.closeTab,
     registerWebview: operations.registerWebview,
+    registerBrowserContents: operations.registerBrowserContents,
+    trustNativeBrowserContents: operations.trustNativeBrowserContents,
+    revokeNativeBrowserContents: operations.revokeNativeBrowserContents,
     navigate: operations.navigate,
     goBack: operations.goBack,
     goForward: operations.goForward,

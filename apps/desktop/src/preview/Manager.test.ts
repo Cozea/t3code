@@ -4044,3 +4044,195 @@ describe("Preview automation diagnostics", () => {
     expect("locator" in error).toBe(false);
   });
 });
+
+describe("browser contents registration ownership", () => {
+  /**
+   * A `WebContentsView` created by Cozea main. Unlike a renderer guest it has
+   * no `hostWebContents` and does not report `getType() === "webview"`, which
+   * is precisely why the legacy guard cannot admit it.
+   */
+  const makeNativeViewWebContents = (id = 42) => {
+    const spies = {
+      on: vi.fn(),
+      setZoomFactor: vi.fn<(factor: number) => void>(),
+      setAudioMuted: vi.fn<(muted: boolean) => void>(),
+      loadURL: vi.fn(async (_url: string) => undefined),
+    };
+    const webContents = {
+      id,
+      mainFrame: { routingId: id },
+      hostWebContents: undefined,
+      executeJavaScript: vi.fn(async () => ({ width: 1280, height: 720 })),
+      isDestroyed: () => false,
+      getType: () => "browserView",
+      getURL: () => "https://example.com",
+      getTitle: () => "Example",
+      isLoading: () => false,
+      getZoomFactor: () => 1,
+      setZoomFactor: spies.setZoomFactor,
+      setAudioMuted: spies.setAudioMuted,
+      setBackgroundThrottling: vi.fn(),
+      isCurrentlyAudible: () => false,
+      loadURL: spies.loadURL,
+      on: spies.on,
+      off: vi.fn(),
+      ipc: { on: vi.fn(), off: vi.fn() },
+      send: vi.fn(),
+      navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+      setWindowOpenHandler: vi.fn(),
+      debugger: {
+        isAttached: () => false,
+        attach: vi.fn(),
+        sendCommand: vi.fn(async () => undefined),
+        on: vi.fn(),
+        off: vi.fn(),
+      },
+      capturePage: vi.fn(async () => ({
+        toJPEG: () => Buffer.from([]),
+        getSize: () => ({ width: 1280, height: 720 }),
+      })),
+    } as unknown as Electron.WebContents;
+    return { webContents, spies };
+  };
+
+  const expectRejected = (exit: Exit.Exit<unknown, unknown>, tabId: string) => {
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      expect(Option.getOrThrow(Cause.findErrorOption(exit.cause))).toMatchObject({
+        _tag: "PreviewWebContentsNotFoundError",
+        tabId,
+        webContentsId: 42,
+      });
+    }
+  };
+
+  effectIt.effect("refuses a native WebContents that main never vouched for", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        fromId.mockReturnValue(makeNativeViewWebContents().webContents);
+        yield* manager.createTab("tab_untrusted");
+
+        const exit = yield* Effect.exit(manager.registerBrowserContents("tab_untrusted", 42));
+
+        // The whole point of the phase: generalizing the backend must not
+        // degrade into accepting any id a caller names.
+        expectRejected(exit, "tab_untrusted");
+      }),
+    ),
+  );
+
+  effectIt.effect("accepts a native WebContents once main has vouched for it", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const { webContents: wc, spies } = makeNativeViewWebContents();
+        fromId.mockReturnValue(wc);
+        yield* manager.createTab("tab_trusted");
+        yield* manager.trustNativeBrowserContents(42);
+
+        const exit = yield* Effect.exit(manager.registerBrowserContents("tab_trusted", 42));
+
+        expect(Exit.isSuccess(exit)).toBe(true);
+        // Registration is what wires the guest up, so listeners on the view are
+        // the observable proof it was admitted rather than silently ignored.
+        expect(spies.on).toHaveBeenCalled();
+      }),
+    ),
+  );
+
+  effectIt.effect("stops accepting a native WebContents after its vouch is revoked", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        fromId.mockReturnValue(makeNativeViewWebContents().webContents);
+        yield* manager.createTab("tab_revoked");
+        yield* manager.trustNativeBrowserContents(42);
+        yield* manager.revokeNativeBrowserContents(42);
+
+        const exit = yield* Effect.exit(manager.registerBrowserContents("tab_revoked", 42));
+
+        // A destroyed view's id can be recycled by Chromium, so a stale vouch
+        // would hand the next view its predecessor's trust.
+        expectRejected(exit, "tab_revoked");
+      }),
+    ),
+  );
+
+  effectIt.effect("keeps the legacy guard closed to a native view", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        fromId.mockReturnValue(makeNativeViewWebContents().webContents);
+        yield* manager.createTab("tab_legacy_guard");
+        // Vouched for, but announced through the renderer handshake, which must
+        // still demand a real `<webview>` guest.
+        yield* manager.trustNativeBrowserContents(42);
+
+        const exit = yield* Effect.exit(manager.registerWebview("tab_legacy_guard", 42));
+
+        expectRejected(exit, "tab_legacy_guard");
+      }),
+    ),
+  );
+
+  effectIt.effect("refuses a destroyed native WebContents even when vouched for", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        fromId.mockReturnValue({ id: 42, isDestroyed: () => true } as never);
+        yield* manager.createTab("tab_destroyed_native");
+        yield* manager.trustNativeBrowserContents(42);
+
+        const exit = yield* Effect.exit(
+          manager.registerBrowserContents("tab_destroyed_native", 42),
+        );
+
+        expectRejected(exit, "tab_destroyed_native");
+      }),
+    ),
+  );
+
+  effectIt.effect("reasserts zoom and mute on the native path as it does for a guest", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const { webContents: wc, spies } = makeNativeViewWebContents();
+        fromId.mockReturnValue(wc);
+        yield* manager.createTab("tab_native_state", { zoomFactor: 1.5 });
+        yield* manager.setAudioMuted("tab_native_state", true);
+        yield* manager.trustNativeBrowserContents(42);
+
+        yield* manager.registerBrowserContents("tab_native_state", 42);
+
+        // A view attaches at the embedder's inherited zoom and unmuted, so the
+        // tab's own state has to win. Same contract the guest path relies on.
+        expect(spies.setZoomFactor).toHaveBeenCalledWith(1.5);
+        expect(spies.setAudioMuted).toHaveBeenCalledWith(true);
+      }),
+    ),
+  );
+
+  effectIt.effect("flushes queued navigation to a natively registered WebContents", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const { webContents: wc, spies } = makeNativeViewWebContents();
+        fromId.mockReturnValue(wc);
+
+        yield* manager.navigate("tab_native_nav", "localhost:3200");
+        expect(yield* manager.automationStatus("tab_native_nav")).toMatchObject({
+          available: false,
+          tabId: "tab_native_nav",
+          url: "http://localhost:3200/",
+        });
+
+        yield* manager.trustNativeBrowserContents(42);
+        yield* manager.registerBrowserContents("tab_native_nav", 42);
+        yield* Effect.yieldNow;
+
+        // Automation has to reach the exact contents the surface registered,
+        // whichever backend created it -- the parity this phase turns on.
+        expect(spies.loadURL).toHaveBeenCalledOnce();
+        expect(spies.loadURL).toHaveBeenCalledWith("http://localhost:3200/");
+        expect(yield* manager.automationStatus("tab_native_nav")).toMatchObject({
+          available: true,
+          tabId: "tab_native_nav",
+        });
+      }),
+    ),
+  );
+});
